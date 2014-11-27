@@ -1,0 +1,180 @@
+#!/bin/bash
+#
+## 	binadit firewall installation script.
+## 	This script must be run as root and be executable (chmod +x /etc/init.d/firewall)
+##
+## 	Just added IPv6 | june 2013
+## 	DMZ IPv6 | sept 2013
+## 	Blacklist ipv6 | nov 2013
+## 	Added ips for SSH Access | feb 2014
+## 	IP range dmz in- and output | mrt 2014
+## 	IP range dmz fix voor IPv6 | may 2014
+## 	ICMP types activated voor IPv4  | nov 2014
+## 	Added multicast enable option | nov 2014
+##
+## TODO
+##
+## Some sort of DDOS attack prevention
+## -A INPUT -p tcp --dport 80 -m limit --limit 25/minute --limit-burst 100 -j ACCEPT
+#
+#chkconfig: 345 99 01
+
+whitelistfile="/var/lib/denyhosts/allow-hosts"
+iptablesFile="/etc/sysconfig/iptables"
+ip6tablesFile="/etc/sysconfig/ip6tables"
+
+if [ -f /etc/debian_version ]; then
+	iptablesFile="/etc/iptables/rules.v4"
+	ip6tablesFile="/etc/iptables/rules.v6"
+fi
+
+source /etc/firewall.d/host.conf
+
+purge() {
+  echo -n "Firewall: Purging and allowing all traffic"
+  /sbin/service iptables stop
+  /sbin/service ip6tables stop
+  echo
+}
+
+setup() {
+  /sbin/service iptables stop
+  touch $whitelistfile
+  echo "# DMZ firewalll IP addresses" >> $whitelistfile
+  for ip in $DMZS ; do
+    echo "-I INPUT -s $ip -j ACCEPT" >> $whitelistfile
+  done
+  
+  touch $iptablesFile
+  echo "# Firewall configuration written by /etc/init.d/firewall.sh
+# To Add ports or IP addresses, edit /etc/firewall.d/host.conf
+#
+# Firewall written by Ronald Jonkers - binadit NL 2013
+#
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT DROP [0:0]
+#LOCALHOST
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT" > $iptablesFile
+
+  echo "# Open TCP ports
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT" >> $iptablesFile
+  for port in $TCPPORTS ; do
+    echo "-I INPUT -p tcp --dport $port -j ACCEPT
+-I OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
+  done
+  for ip in $SSHACCESS; do
+    echo "-I INPUT -p tcp --dport 22 -s $ip -j ACCEPT
+-I OUTPUT -p tcp --dport 22 -s $ip -j ACCEPT" >> $iptablesFile
+  done
+  echo "# Open UDP ports" >> $iptablesFile
+  for port in $UDPPORTS ; do
+    echo "-I INPUT -p udp --dport $port -j ACCEPT
+-I OUTPUT -p udp --dport $port -j ACCEPT" >> $iptablesFile
+  done
+  echo "# Open IP addresses" >> $iptablesFile
+  for ip in $DMZS ; do
+    echo "-I INPUT -s $ip -j ACCEPT
+-I OUTPUT -d $ip -j ACCEPT" >> $iptablesFile
+  done
+  for ip in $DMZRANGE ; do
+    echo "-I INPUT -m iprange --src-range $ip -j ACCEPT
+-I OUTPUT -m iprange --dst-range $ip -j ACCEPT" >> $iptablesFile
+  done
+  echo "# Blocked IP addresses" >> $iptablesFile
+  for ip in $BLACKLIST ; do
+    echo "-I INPUT -s $ip -j DROP
+-I OUTPUT -s $ip -j DROP" >> $iptablesFile
+  done
+  echo "# Blocked IP ranges" >> $iptablesFile
+  for ip in $BLOCKRANGE ; do
+    echo "-I INPUT -m iprange --src-range $ip -j DROP
+-I OUTPUT -m iprange --src-range $ip -j DROP" >> $iptablesFile
+  done
+
+if [ ! "$MULTICAST_ENABLE" == "TRUE" ]; then
+  echo "# Multicast
+-A INPUT -d 224.0.0.0/8 -j ACCEPT
+-I OUTPUT -d 224.0.0.0/8 -j ACCEPT" >> $iptablesFile
+fi
+
+  echo "# Enable ICMP
+-A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
+-A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
+-A INPUT -p icmp -m icmp --icmp-type fragmentation-needed -j ACCEPT
+-A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT"  >> $iptablesFile
+  
+  echo "COMMIT" >> $iptablesFile
+  
+  /sbin/service iptables start
+  
+# IPv6 FIREWALL
+  /sbin/service ip6tables stop
+  /bin/touch $ip6tablesFile
+  echo "# Firewall configuration written by /etc/init.d/firewall.sh
+# To Add ports or IP addresses, edit /etc/firewall.d/host.conf
+#
+# Firewall written by Ronald Jonkers - binadit NL 2013
+#
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT DROP [0:0]
+#LOCALHOST
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT" > $ip6tablesFile
+
+  echo "# Open TCP ports
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT" >> $ip6tablesFile
+  for port in $TCPPORTS ; do
+    echo "-I INPUT -p tcp --dport $port -j ACCEPT
+-I OUTPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
+  done
+  echo "# Open UDP ports" >> $ip6tablesFile
+  for port in $UDPPORTS ; do
+    echo "-I INPUT -p udp --dport $port -j ACCEPT
+-I OUTPUT -p udp --dport $port -j ACCEPT" >> $ip6tablesFile
+  done
+  echo "# Open IP addresses" >> $ip6tablesFile
+  for ip in $DMZS_IPv6 ; do
+    echo "-I INPUT -m iprange --src-range $ip -j ACCEPT
+-I OUTPUT -m iprange --dst-range $ip -j ACCEPT" >> $ip6tablesFile
+  done
+  echo "# Blocked IP addresses" >> $ip6tablesFile
+  for ip in $BLACKLIST_IPv6 ; do
+    echo "-A INPUT -s $ip -j DROP" >> $ip6tablesFile
+  done
+  
+  echo "COMMIT" >> $ip6tablesFile
+  
+  /sbin/service ip6tables start
+  
+  
+}
+
+case "$1" in
+  start)
+    echo "Starting firewall..."
+    purge
+    setup
+    ;;
+  stop)
+    echo "Stopping firewall..."
+    purge
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  status)
+    iptables -n -L
+    ip6tables -n -L
+    ;;
+  *)
+    echo "Usage: $0 <start|stop|restart|status>"
+    ;;
+esac
