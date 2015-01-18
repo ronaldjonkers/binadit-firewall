@@ -1,0 +1,153 @@
+#!/bin/bash
+#
+## 	binadit firewall installation script.
+## 	This script must be run as root and be executable (chmod +x /etc/init.d/firewall)
+##
+## 	Just added IPv6 | june 2013
+## 	DMZ IPv6 | sept 2013
+## 	Blacklist ipv6 | nov 2013
+## 	Added ips for SSH Access | feb 2014
+## 	IP range dmz in- and output | mrt 2014
+## 	IP range dmz fix voor IPv6 | may 2014
+## 	ICMP types activated voor IPv4  | nov 2014
+## 	Added multicast enable option | nov 2014
+##  Added SSH port detection | jan 2015
+##  Complete redesign of script | jan 2015
+##
+#
+#chkconfig: 345 99 01
+
+SSHPORT=`grep "Port " /etc/ssh/sshd_config | awk '{print $2}'`
+IPTABLES=`which iptables`
+IP6TABLES=`which ip6tables`
+SSHACCESSnew=""
+DMZSnew=""
+
+# Load config file
+source /etc/firewall.d/host.conf
+
+function f_is_ip(){
+	IP="`echo "$1" | /bin/egrep "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"`"
+	if [ "$IP" != "" ]
+	then
+		firewallIP=$1
+	else
+		firewallIP=`dig +short $1 | awk '{print; exit}'`
+	fi
+}
+
+function changeVariables() {
+	for ip in $SSHACCESS; do
+		f_is_ip $ip
+  		SSHACCESSnew="$SSHACCESSnew $firewallIP"
+  	done
+  	for ip in $DMZS; do
+		f_is_ip $ip
+  		DMZSnew="$DMZSnew $firewallIP"
+  	done
+}
+
+purge() {
+	echo -n "Firewall: Purging and allowing all traffic"
+	$IPTABLES -F
+	/sbin/service iptables stop
+	/sbin/service ip6tables stop
+	echo "" > /etc/sysconfig/iptables
+}
+
+setup() {
+	/sbin/service iptables start
+	echo -n "Firewall: Setup traffic filtering"
+	
+	changeVariables
+	
+	# Default actions
+	$IPTABLES -P INPUT DROP
+	$IPTABLES -P FORWARD DROP
+	$IPTABLES -P OUTPUT DROP
+	
+	$IPTABLES -A INPUT -m state --state ESTABLISHED -j ACCEPT
+	$IPTABLES -A OUTPUT -m state --state ESTABLISHED -j ACCEPT
+	
+	# Open DNS
+	
+	$IPTABLES -A OUTPUT -p udp --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT
+	$IPTABLES -A INPUT  -p udp --sport 53 -m state --state ESTABLISHED     -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT
+	$IPTABLES -A INPUT  -p tcp --sport 53 -m state --state ESTABLISHED     -j ACCEPT
+	
+	# SSH access to server
+	for ip in $SSHACCESSnew; do
+  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+  	done
+  
+	for port in $TCPPORTS ; do
+  		$IPTABLES -A INPUT -p tcp --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --sport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+  	done
+ 
+	for port in $UDPPORTS ; do
+		$IPTABLES -A INPUT -p udp --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+		$IPTABLES -A OUTPUT -p udp --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+	done
+	
+	for ip in $DMZSnew ; do
+		$IPTABLES -A INPUT -s $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+		$IPTABLES -A OUTPUT -d $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+	done
+	
+	for ip in $DMZRANGE ; do
+		$IPTABLES -A INPUT -m iprange --src-range $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+		$IPTABLES -A OUTPUT -m iprange --dst-range $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+	done
+	
+	for ip in $BLACKLIST ; do
+    	$IPTABLES -A INPUT -s $ip -j DROP
+    	$IPTABLES -A OUTPUT -s $ip -j DROP
+    done
+  
+	for ip in $BLOCKRANGE ; do
+    	$IPTABLES -A INPUT -m iprange --src-range $ip -j DROP
+		$IPTABLES -A OUTPUT -m iprange --src-range $ip -j DROP
+	done
+	
+	# Multicast
+	$IPTABLES -A INPUT -d 224.0.0.0/8 -m state --state NEW,ESTABLISHED -j ACCEPT
+	$IPTABLES -A OUTPUT -d 224.0.0.0/8 -m state --state NEW,ESTABLISHED -j ACCEPT
+	
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type fragmentation-needed -j ACCEPT
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT
+	#$IPTABLES -A INPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	#$IPTABLES -A INPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	#$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	#$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	
+	iptables-save > /etc/sysconfig/iptables
+    
+}
+
+case "$1" in
+  start)
+    echo "Starting firewall..."
+    setup
+    ;;
+  stop)
+    echo "Stopping firewall..."
+    purge
+    ;;
+  restart)
+    echo "Stopping firewall..."
+    purge
+    setup
+    ;;
+  status)
+    iptables -n -L
+    ip6tables -n -L
+    ;;
+  *)
+    echo "Usage: $0 <start|stop|restart|status>"
+    ;;
+esac
