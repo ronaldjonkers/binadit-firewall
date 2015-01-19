@@ -27,17 +27,21 @@ SSHACCESSnew=""
 DMZSnew=""
 
 if [ -f /usr/bin/lsb_release ]; then
-	iptablesFile="/etc/iptables/rules.v4"
-	ip6tablesFile="/etc/iptables/rules.v6"
-	IPTABLESSERVICE="iptables-persistent"
-	IP6TABLESSERVICE=""
-	
-	if [ ! -f $iptablesFile ]; then
-		aptitude -y install iptables-persistent
+	distro=`/usr/bin/lsb_release -a | grep "Distributor ID" | awk '{print $3}'`
+	if [ $distro == "Ubuntu" ] || [ $distro == "Debian" ]; then
+		echo "We are using Debian or Ubuntu"
+		iptablesFile="/etc/iptables/rules.v4"
+		ip6tablesFile="/etc/iptables/rules.v6"
+		IPTABLESSERVICE="iptables-persistent"
+		IP6TABLESSERVICE=""
+		if [ ! -f $iptablesFile ]; then
+			aptitude -y install iptables-persistent
+		fi
 	fi
 fi
 
 if [ -f /etc/redhat-release ]; then
+	echo "We are using Centos, Redhat or Fedora"
 	iptablesFile="/etc/sysconfig/iptables"
 	ip6tablesFile="/etc/sysconfig/ip6tables"
 	IPTABLESSERVICE="iptables"
@@ -88,7 +92,8 @@ setup() {
 	echo "Firewall: Setup traffic filtering"
 	
 	changeVariables
-	
+
+# IP4TABLES	
 	# Default actions
 	$IPTABLES -P INPUT DROP
 	$IPTABLES -P FORWARD DROP
@@ -104,23 +109,23 @@ setup() {
 	
 	# Open DNS
 	$IPTABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
-	$IPTABLES -A INPUT  -p udp --sport 53 -j ACCEPT
+	$IPTABLES -A INPUT  -p udp --dport 53 -j ACCEPT
 	$IPTABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
-	$IPTABLES -A INPUT  -p tcp --sport 53 -j ACCEPT
+	$IPTABLES -A INPUT  -p tcp --dport 53 -j ACCEPT
 	
 	# SSH access to server
 	for ip in $SSHACCESSnew; do
-  		$IPTABLES -A INPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   		$IPTABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   
 	for port in $TCPPORTS ; do
-  		$IPTABLES -A INPUT -p tcp --sport $port -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
  
 	for port in $UDPPORTS ; do
-		$IPTABLES -A INPUT -p udp --sport $port -j ACCEPT
+		$IPTABLES -A INPUT -p udp --dport $port -j ACCEPT
 		$IPTABLES -A OUTPUT -p udp --dport $port -j ACCEPT
 	done
 	
@@ -146,6 +151,18 @@ setup() {
 	
 	# Multicast
 	if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+		$IPTABLES -A INPUT -s 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A INPUT -d 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A OUTPUT -s 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A OUTPUT -d 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A INPUT -s 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -d 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -s 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -d 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -s 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -d 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -s 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -d 239.0.0.0/5 -j ACCEPT
 		$IPTABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
 		$IPTABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
 		$IPTABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
@@ -170,10 +187,7 @@ setup() {
 	
 	$IPTABLESSAVE > $iptablesFile
 	
-	
-	
-	
-	
+# IP6TABLES
 	
 	# Default actions
 	$IP6TABLES -P INPUT DROP
@@ -191,23 +205,23 @@ setup() {
 	# Open DNS
 	
 	$IP6TABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
-	$IP6TABLES -A INPUT  -p udp --sport 53 -j ACCEPT
+	$IP6TABLES -A INPUT  -p udp --dport 53 -j ACCEPT
 	$IP6TABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
-	$IP6TABLES -A INPUT  -p tcp --sport 53 -j ACCEPT
+	$IP6TABLES -A INPUT  -p tcp --dport 53 -j ACCEPT
 	
 	# SSH access to server
 	for ip in $SSHACCESS_IPv6; do
-  		$IP6TABLES -A INPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   
 	for port in $TCPPORTS ; do
-  		$IP6TABLES -A INPUT -p tcp --sport $port -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
  
 	for port in $UDPPORTS ; do
-		$IP6TABLES -A INPUT -p udp --sport $port -j ACCEPT
+		$IP6TABLES -A INPUT -p udp --dport $port -j ACCEPT
 		$IP6TABLES -A OUTPUT -p udp --dport $port -j ACCEPT
 	done
 	

@@ -60,28 +60,28 @@ setup() {
 -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT  
 # Open DNS ports
 -A OUTPUT -p udp --dport 53 -j ACCEPT
--A INPUT -p udp --sport 53 -j ACCEPT
+-A INPUT -p udp --dport 53 -j ACCEPT
 -A OUTPUT -p tcp --dport 53 -j ACCEPT
--A INPUT -p tcp --sport 53 -j ACCEPT" >> $iptablesFile
+-A INPUT -p tcp --dport 53 -j ACCEPT" >> $iptablesFile
   for port in $TCPPORTS ; do
-    echo "-A INPUT -p tcp --sport $port -j ACCEPT
+    echo "-A INPUT -p tcp --dport $port -j ACCEPT
 -A OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
   done
   
   for port in $TCPPORTS_INPUT ; do
-    echo "-A INPUT -p tcp --sport $port -j ACCEPT" >> $iptablesFile
+    echo "-A INPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
   done
   for port in $TCPPORTS_OUTPUT ; do
     echo "-A OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
   done
   
   for ip in $SSHACCESS; do
-    echo "-A INPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+    echo "-A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
 -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT" >> $iptablesFile
   done
   echo "# Open UDP ports" >> $iptablesFile
   for port in $UDPPORTS ; do
-    echo "-A INPUT -p udp --sport $port -j ACCEPT
+    echo "-A INPUT -p udp --dport $port -j ACCEPT
 -A OUTPUT -p udp --dport $port -j ACCEPT" >> $iptablesFile
   done
   echo "# Open IP addresses" >> $iptablesFile
@@ -163,13 +163,13 @@ echo "-A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
 -A INPUT -m state --state ESTABLISHED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED -j ACCEPT" >> $ip6tablesFile
   for port in $TCPPORTS ; do
-    echo "-A INPUT -p tcp --sport $port -j ACCEPT
+    echo "-A INPUT -p tcp --dport $port -j ACCEPT
 -A OUTPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
   done
   
   echo "# Open TCP incomming ports" >> $ip6tablesFile
   for port in $TCPPORTS_INPUT ; do
-    echo "-A INPUT -p tcp --sport $port -j ACCEPT" >> $ip6tablesFile
+    echo "-A INPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
   done
   echo "# Open TCP outgoing ports" >> $ip6tablesFile
   for port in $TCPPORTS_OUTPUT ; do
@@ -179,7 +179,7 @@ echo "-A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
   
   echo "# Open UDP ports" >> $ip6tablesFile
   for port in $UDPPORTS ; do
-    echo "-A INPUT -p udp --sport $port -j ACCEPT
+    echo "-A INPUT -p udp --dport $port -j ACCEPT
 -A OUTPUT -p udp --dport $port -j ACCEPT" >> $ip6tablesFile
   done
   echo "# Open IP addresses" >> $ip6tablesFile
