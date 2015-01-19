@@ -26,11 +26,15 @@ SERVICE=`which service`
 SSHACCESSnew=""
 DMZSnew=""
 
-if [ -f /etc/debian_version ]; then
+if [ -f /usr/bin/lsb_release ]; then
 	iptablesFile="/etc/iptables/rules.v4"
 	ip6tablesFile="/etc/iptables/rules.v6"
 	IPTABLESSERVICE="iptables-persistent"
 	IP6TABLESSERVICE=""
+	
+	if [ -f $iptablesFile ]; then
+		aptitude -y install iptables-persistent
+	fi
 fi
 
 if [ -f /etc/redhat-release ]; then
@@ -219,7 +223,7 @@ setup() {
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner postfix -j ACCEPT
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --uid-owner root -j ACCEPT
 	
-	$IP6TABLESSAVE > $iptablesFile
+	$IP6TABLESSAVE > $ip6tablesFile
 
     echo ""
     echo ""
