@@ -56,8 +56,8 @@ setup() {
 -A INPUT -i lo -j ACCEPT
 -A OUTPUT -o lo -j ACCEPT" > $iptablesFile
 
-  echo "-A INPUT -m state --state ESTABLISHED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED -j ACCEPT  
+  echo "-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT  
 # Open DNS ports
 -A OUTPUT -p udp --dport 53 -j ACCEPT
 -A INPUT -p udp --sport 53 -j ACCEPT
