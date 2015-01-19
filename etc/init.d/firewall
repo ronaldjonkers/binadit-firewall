@@ -20,6 +20,7 @@
 #
 #chkconfig: 345 99 01
 
+SERVICE=`which service`
 iptablesFile="/etc/sysconfig/iptables"
 ip6tablesFile="/etc/sysconfig/ip6tables"
 SSHPORT=`grep "Port " /etc/ssh/sshd_config | awk '{print $2}'`
@@ -33,13 +34,13 @@ source /etc/firewall.d/host.conf
 
 purge() {
   echo -n "Firewall: Purging and allowing all traffic"
-  /sbin/service iptables stop
-  /sbin/service ip6tables stop
+  $SERVICE iptables stop
+  $SERVICE ip6tables stop
   echo
 }
 
 setup() {
-  /sbin/service iptables stop  
+  $SERVICE iptables stop  
   touch $iptablesFile
   echo "# Firewall configuration written by /etc/init.d/firewall
 # To Add ports or IP addresses, edit /etc/firewall.d/host.conf
@@ -58,21 +59,29 @@ setup() {
   echo "-A INPUT -m state --state ESTABLISHED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED -j ACCEPT  
 # Open DNS ports
--A OUTPUT -p udp -o eth0 --dport 53 -j ACCEPT
--A INPUT -p udp -i eth0 --sport 53 -j ACCEPT
--A OUTPUT -p tcp -o eth0 --dport 53 -j ACCEPT
--A INPUT -p tcp -i eth0 --sport 53 -j ACCEPT" >> $iptablesFile
+-A OUTPUT -p udp --dport 53 -j ACCEPT
+-A INPUT -p udp --sport 53 -j ACCEPT
+-A OUTPUT -p tcp --dport 53 -j ACCEPT
+-A INPUT -p tcp --sport 53 -j ACCEPT" >> $iptablesFile
   for port in $TCPPORTS ; do
-    echo "-A INPUT -p tcp --dport $port -j ACCEPT
--A OUTPUT -p tcp --sport $port -j ACCEPT" >> $iptablesFile
+    echo "-A INPUT -p tcp --sport $port -j ACCEPT
+-A OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
   done
+  
+  for port in $TCPPORTS_INPUT ; do
+    echo "-A INPUT -p tcp --sport $port -j ACCEPT" >> $iptablesFile
+  done
+  for port in $TCPPORTS_OUTPUT ; do
+    echo "-A OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
+  done
+  
   for ip in $SSHACCESS; do
-    echo "-A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
--A OUTPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT" >> $iptablesFile
+    echo "-A INPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+-A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT" >> $iptablesFile
   done
   echo "# Open UDP ports" >> $iptablesFile
   for port in $UDPPORTS ; do
-    echo "-A INPUT -p udp --dport $port -j ACCEPT
+    echo "-A INPUT -p udp --sport $port -j ACCEPT
 -A OUTPUT -p udp --dport $port -j ACCEPT" >> $iptablesFile
   done
   echo "# Open IP addresses" >> $iptablesFile
@@ -95,11 +104,24 @@ setup() {
 -A OUTPUT -m iprange --src-range $ip -j DROP" >> $iptablesFile
   done
 
-if [ ! "$MULTICAST_ENABLE" == "TRUE" ]; then
+if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
   echo "# Multicast
 -A INPUT -d 224.0.0.0/8 -j ACCEPT
--A OUTPUT -d 224.0.0.0/8 -j ACCEPT" >> $iptablesFile
+-A OUTPUT -d 224.0.0.0/8 -j ACCEPT
+-I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+-I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+-A INPUT -m pkttype --pkt-type multicast -j ACCEPT
+-A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+-A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
+-A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT" >> $iptablesFile
 fi
+
+echo "# SPAM security" >> $iptablesFile
+echo "-A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner mail -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner postfix -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --uid-owner root -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp-port-unreachable" >> $iptablesFile
 
   echo '# Enable ICMP
 -A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
@@ -119,10 +141,10 @@ fi
   
   echo "COMMIT" >> $iptablesFile
   
-  /sbin/service iptables start
+  $SERVICE iptables start
   
 # IPv6 FIREWALL
-  /sbin/service ip6tables stop
+  $SERVICE ip6tables stop
   /bin/touch $ip6tablesFile
   echo "# Firewall configuration written by /etc/init.d/firewall.sh
 # To Add ports or IP addresses, edit /etc/firewall.d/host.conf
@@ -141,12 +163,23 @@ fi
 -A INPUT -m state --state ESTABLISHED -j ACCEPT
 -A OUTPUT -m state --state ESTABLISHED -j ACCEPT" >> $ip6tablesFile
   for port in $TCPPORTS ; do
-    echo "-A INPUT -p tcp --dport $port -j ACCEPT
+    echo "-A INPUT -p tcp --sport $port -j ACCEPT
 -A OUTPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
   done
+  
+  echo "# Open TCP incomming ports" >> $ip6tablesFile
+  for port in $TCPPORTS_INPUT ; do
+    echo "-A INPUT -p tcp --sport $port -j ACCEPT" >> $ip6tablesFile
+  done
+  echo "# Open TCP outgoing ports" >> $ip6tablesFile
+  for port in $TCPPORTS_OUTPUT ; do
+    echo "-A OUTPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
+  done
+  
+  
   echo "# Open UDP ports" >> $ip6tablesFile
   for port in $UDPPORTS ; do
-    echo "-A INPUT -p udp --dport $port -j ACCEPT
+    echo "-A INPUT -p udp --sport $port -j ACCEPT
 -A OUTPUT -p udp --dport $port -j ACCEPT" >> $ip6tablesFile
   done
   echo "# Open IP addresses" >> $ip6tablesFile
@@ -158,10 +191,27 @@ fi
   for ip in $BLACKLIST_IPv6 ; do
     echo "-A INPUT -s $ip -j DROP" >> $ip6tablesFile
   done
+
+  if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+  echo "# Multicast
+-I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+-I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+-A INPUT -m pkttype --pkt-type multicast -j ACCEPT
+-A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+-A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
+-A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT" >> $iptablesFile
+fi
+  
+  echo "# SPAM security" >> $ip6tablesFile
+  echo "-A OUTPUT -d ::1 -p tcp -m tcp --dport 25 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -m owner --gid-owner mail -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -m owner --gid-owner postfix -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -m owner --uid-owner root -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp6-adm-prohibited" >> $ip6tablesFile
   
   echo "COMMIT" >> $ip6tablesFile
   
-  /sbin/service ip6tables start
+  $SERVICE ip6tables start
   
   
 }
