@@ -106,10 +106,10 @@ setup() {
 
 if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
   echo "# Multicast
--A INPUT -d 224.0.0.0/8 -j ACCEPT
--A OUTPUT -d 224.0.0.0/8 -j ACCEPT
--I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
--I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+#-A INPUT -d 224.0.0.0/8 -j ACCEPT
+#-A OUTPUT -d 224.0.0.0/8 -j ACCEPT
+#-I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+#-I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
 -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
 -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
 -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
@@ -194,8 +194,8 @@ echo "-A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
 
   if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
   echo "# Multicast
--I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
--I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+#-I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
+#-I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
 -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
 -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
 -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT

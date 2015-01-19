@@ -20,8 +20,25 @@
 SSHPORT=`grep "Port " /etc/ssh/sshd_config | awk '{print $2}'`
 IPTABLES=`which iptables`
 IP6TABLES=`which ip6tables`
+IPTABLESSAVE=`which iptables-save`
+IP6TABLESSAVE=`which ip6tables-save`
+SERVICE=`which service`
 SSHACCESSnew=""
 DMZSnew=""
+
+if [ -f /etc/debian_version ]; then
+	iptablesFile="/etc/iptables/rules.v4"
+	ip6tablesFile="/etc/iptables/rules.v6"
+	IPTABLESSERVICE="iptables-persistent"
+	IP6TABLESSERVICE=""
+fi
+
+if [ -f /etc/redhat-release ]; then
+	iptablesFile="/etc/sysconfig/iptables"
+	ip6tablesFile="/etc/sysconfig/ip6tables"
+	IPTABLESSERVICE="iptables"
+	IP6TABLESSERVICE="ip6tables"
+fi
 
 # Load config file
 source /etc/firewall.d/host.conf
@@ -49,14 +66,18 @@ function changeVariables() {
 
 purge() {
 	echo -n "Firewall: Purging and allowing all traffic"
-	$IPTABLES -F
-	/sbin/service iptables stop
-	/sbin/service ip6tables stop
-	echo "" > /etc/sysconfig/iptables
+
+	$SERVICE $IPTABLESSERVICE flush
+	if [ "$IP6TABLESSERVICE" != "" ]; then
+		$SERVICE $IP6TABLESSERVICE stop
+	fi
+	echo "" > $iptablesFile
+	echo "" > $ip6tablesFile
 }
 
 setup() {
-	/sbin/service iptables start
+	$SERVICE $IPTABLESSERVICE start
+	#$SERVICE $IP6TABLES start
 	echo -n "Firewall: Setup traffic filtering"
 	
 	changeVariables
@@ -66,40 +87,41 @@ setup() {
 	$IPTABLES -P FORWARD DROP
 	$IPTABLES -P OUTPUT DROP
 	
-	$IPTABLES -A INPUT -m state --state ESTABLISHED -j ACCEPT
-	$IPTABLES -A OUTPUT -m state --state ESTABLISHED -j ACCEPT
+	$IPTABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	$IPTABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 	
 	# Open DNS
 	
-	$IPTABLES -A OUTPUT -p udp --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT
-	$IPTABLES -A INPUT  -p udp --sport 53 -m state --state ESTABLISHED     -j ACCEPT
-	$IPTABLES -A OUTPUT -p tcp --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT
-	$IPTABLES -A INPUT  -p tcp --sport 53 -m state --state ESTABLISHED     -j ACCEPT
+	$IPTABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
+	$IPTABLES -A INPUT  -p udp --sport 53 -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
+	$IPTABLES -A INPUT  -p tcp --sport 53 -j ACCEPT
 	
+	echo $SSHACCESSnew
 	# SSH access to server
 	for ip in $SSHACCESSnew; do
-  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -m state --state NEW,ESTABLISHED -j ACCEPT
-  		$IPTABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
   	done
   
 	for port in $TCPPORTS ; do
-  		$IPTABLES -A INPUT -p tcp --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
-  		$IPTABLES -A OUTPUT -p tcp --sport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --sport $port -j ACCEPT
   	done
  
 	for port in $UDPPORTS ; do
-		$IPTABLES -A INPUT -p udp --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
-		$IPTABLES -A OUTPUT -p udp --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+		$IPTABLES -A INPUT -p udp --dport $port -j ACCEPT
+		$IPTABLES -A OUTPUT -p udp --dport $port -j ACCEPT
 	done
 	
 	for ip in $DMZSnew ; do
-		$IPTABLES -A INPUT -s $ip -m state --state NEW,ESTABLISHED -j ACCEPT
-		$IPTABLES -A OUTPUT -d $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+		$IPTABLES -A INPUT -s $ip -j ACCEPT
+		$IPTABLES -A OUTPUT -d $ip -j ACCEPT
 	done
 	
 	for ip in $DMZRANGE ; do
-		$IPTABLES -A INPUT -m iprange --src-range $ip -m state --state NEW,ESTABLISHED -j ACCEPT
-		$IPTABLES -A OUTPUT -m iprange --dst-range $ip -m state --state NEW,ESTABLISHED -j ACCEPT
+		$IPTABLES -A INPUT -m iprange --src-range $ip -j ACCEPT
+		$IPTABLES -A OUTPUT -m iprange --dst-range $ip -j ACCEPT
 	done
 	
 	for ip in $BLACKLIST ; do
@@ -113,8 +135,19 @@ setup() {
 	done
 	
 	# Multicast
-	$IPTABLES -A INPUT -d 224.0.0.0/8 -m state --state NEW,ESTABLISHED -j ACCEPT
-	$IPTABLES -A OUTPUT -d 224.0.0.0/8 -m state --state NEW,ESTABLISHED -j ACCEPT
+	if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+		$IPTABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IPTABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+		$IPTABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IPTABLES -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
+	fi
+	
+	# OPEN SMTP with spam protection
+	$IPTABLES -A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner mail -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner postfix -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --uid-owner root -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp-port-unreachable
 	
 	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
 	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
@@ -122,10 +155,84 @@ setup() {
 	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT
 	#$IPTABLES -A INPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
 	#$IPTABLES -A INPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
-	#$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
-	#$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
 	
-	iptables-save > /etc/sysconfig/iptables
+	$IPTABLESSAVE > $iptablesFile
+	
+	
+	
+	
+	
+	
+	# Default actions
+	$IP6TABLES -P INPUT DROP
+	$IP6TABLES -P FORWARD DROP
+	$IP6TABLES -P OUTPUT DROP
+	
+	$IP6TABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	$IP6TABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	
+	# Open DNS
+	
+	$IP6TABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
+	$IP6TABLES -A INPUT  -p udp --sport 53 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
+	$IP6TABLES -A INPUT  -p tcp --sport 53 -j ACCEPT
+	
+	echo $SSHACCESSnew
+	# SSH access to server
+	for ip in $SSHACCESSnew; do
+  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  	done
+  
+	for port in $TCPPORTS ; do
+  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --sport $port -j ACCEPT
+  	done
+ 
+	for port in $UDPPORTS ; do
+		$IP6TABLES -A INPUT -p udp --dport $port -j ACCEPT
+		$IP6TABLES -A OUTPUT -p udp --dport $port -j ACCEPT
+	done
+	
+	for ip in $DMZS_IPv6 ; do
+		$IP6TABLES -A INPUT -m iprange --src-range $ip -j ACCEPT
+		$IP6TABLES -A OUTPUT -m iprange --dst-range $ip -j ACCEPT
+	done
+	
+	for ip in $BLACKLIST_IPv6 ; do
+    	$IP6TABLES -A INPUT -s $ip -j DROP
+    	$IP6TABLES -A OUTPUT -s $ip -j DROP
+    done
+	
+	# Multicast
+	if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+		$IP6TABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IP6TABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+		$IP6TABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IP6TABLES -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
+	fi
+	
+	# OPEN SMTP with spam protection
+	$IP6TABLES -A OUTPUT -d ::1 -p tcp -m tcp --dport 25 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner mail -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner postfix -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --uid-owner root -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp-port-unreachable
+	
+	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
+	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
+	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type fragmentation-needed -j ACCEPT
+	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT
+	#$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	#$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	
+	$IP6TABLESSAVE > $iptablesFile
+
     
 }
 
