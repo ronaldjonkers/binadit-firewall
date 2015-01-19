@@ -65,7 +65,7 @@ function changeVariables() {
 }
 
 purge() {
-	echo -n "Firewall: Purging and allowing all traffic"
+	echo "Firewall: Purging and allowing all traffic"
 
 	$SERVICE $IPTABLESSERVICE flush
 	if [ "$IP6TABLESSERVICE" != "" ]; then
@@ -78,7 +78,7 @@ purge() {
 setup() {
 	$SERVICE $IPTABLESSERVICE start
 	#$SERVICE $IP6TABLES start
-	echo -n "Firewall: Setup traffic filtering"
+	echo "Firewall: Setup traffic filtering"
 	
 	changeVariables
 	
@@ -97,7 +97,6 @@ setup() {
 	$IPTABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
 	$IPTABLES -A INPUT  -p tcp --sport 53 -j ACCEPT
 	
-	echo $SSHACCESSnew
 	# SSH access to server
 	for ip in $SSHACCESSnew; do
   		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
@@ -180,9 +179,8 @@ setup() {
 	$IP6TABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
 	$IP6TABLES -A INPUT  -p tcp --sport 53 -j ACCEPT
 	
-	echo $SSHACCESSnew
 	# SSH access to server
-	for ip in $SSHACCESSnew; do
+	for ip in $SSHACCESS_IPv6; do
   		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
   	done
@@ -220,20 +218,11 @@ setup() {
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner mail -j ACCEPT
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner postfix -j ACCEPT
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --uid-owner root -j ACCEPT
-	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp-port-unreachable
-	
-	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
-	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
-	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type fragmentation-needed -j ACCEPT
-	$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT
-	#$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
-	#$IP6TABLES -A INPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
-	$IP6TABLES -A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
-	$IP6TABLES -A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
 	
 	$IP6TABLESSAVE > $iptablesFile
 
-    
+    echo ""
+    echo ""
 }
 
 case "$1" in
