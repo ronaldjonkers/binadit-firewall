@@ -16,6 +16,16 @@
 ##
 #
 #chkconfig: 345 99 01
+#
+#
+### BEGIN INIT INFO
+# Provides:        firewall
+# Required-Start:  mountkernfs $local_fs
+# Required-Stop:   $local_fs
+# Default-Start:   2 3 4 5
+# Default-Stop:    0 1 6
+# Short-Description: Firewall
+### END INIT INFO
 
 SSHPORT=`grep "Port " /etc/ssh/sshd_config | awk '{print $2}'`
 IPTABLES=`which iptables`
@@ -26,6 +36,7 @@ SERVICE=`which service`
 SSHACCESSnew=""
 DMZSnew=""
 
+#OS CHECK
 if [ -f /usr/bin/lsb_release ]; then
 	distro=`/usr/bin/lsb_release -a | grep "Distributor ID" | awk '{print $3}'`
 	if [ $distro == "Ubuntu" ] || [ $distro == "Debian" ]; then
