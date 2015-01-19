@@ -32,7 +32,7 @@ if [ -f /usr/bin/lsb_release ]; then
 	IPTABLESSERVICE="iptables-persistent"
 	IP6TABLESSERVICE=""
 	
-	if [ -f $iptablesFile ]; then
+	if [ ! -f $iptablesFile ]; then
 		aptitude -y install iptables-persistent
 	fi
 fi
@@ -70,11 +70,14 @@ function changeVariables() {
 
 purge() {
 	echo "Firewall: Purging and allowing all traffic"
-
-	$SERVICE $IPTABLESSERVICE flush
-	if [ "$IP6TABLESSERVICE" != "" ]; then
+		
+	if [ -f /etc/redhat-release ]; then
+		$SERVICE $IPTABLESSERVICE stop
 		$SERVICE $IP6TABLESSERVICE stop
+	else 
+		$SERVICE $IPTABLESSERVICE flush
 	fi
+	
 	echo "" > $iptablesFile
 	echo "" > $ip6tablesFile
 }
@@ -91,11 +94,15 @@ setup() {
 	$IPTABLES -P FORWARD DROP
 	$IPTABLES -P OUTPUT DROP
 	
+	# Localhost
+	$IPTABLES -A INPUT -i lo -j ACCEPT
+	$IPTABLES -A OUTPUT -o lo -j ACCEPT
+	
+	# Default state
 	$IPTABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 	$IPTABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 	
 	# Open DNS
-	
 	$IPTABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
 	$IPTABLES -A INPUT  -p udp --sport 53 -j ACCEPT
 	$IPTABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
@@ -103,17 +110,17 @@ setup() {
 	
 	# SSH access to server
 	for ip in $SSHACCESSnew; do
-  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IPTABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   
 	for port in $TCPPORTS ; do
-  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
-  		$IPTABLES -A OUTPUT -p tcp --sport $port -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --sport $port -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
  
 	for port in $UDPPORTS ; do
-		$IPTABLES -A INPUT -p udp --dport $port -j ACCEPT
+		$IPTABLES -A INPUT -p udp --sport $port -j ACCEPT
 		$IPTABLES -A OUTPUT -p udp --dport $port -j ACCEPT
 	done
 	
@@ -173,6 +180,11 @@ setup() {
 	$IP6TABLES -P FORWARD DROP
 	$IP6TABLES -P OUTPUT DROP
 	
+	# Localhost
+	$IP6TABLES -A INPUT -i lo -j ACCEPT
+	$IP6TABLES -A OUTPUT -o lo -j ACCEPT
+	
+	# Default state
 	$IP6TABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 	$IP6TABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 	
@@ -185,17 +197,17 @@ setup() {
 	
 	# SSH access to server
 	for ip in $SSHACCESS_IPv6; do
-  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IP6TABLES -A OUTPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --sport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   
 	for port in $TCPPORTS ; do
-  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
-  		$IP6TABLES -A OUTPUT -p tcp --sport $port -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --sport $port -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
  
 	for port in $UDPPORTS ; do
-		$IP6TABLES -A INPUT -p udp --dport $port -j ACCEPT
+		$IP6TABLES -A INPUT -p udp --sport $port -j ACCEPT
 		$IP6TABLES -A OUTPUT -p udp --dport $port -j ACCEPT
 	done
 	
