@@ -99,7 +99,7 @@ function f_is_ip(){
 	then
 		firewallIP=$1
 	else
-		firewallIP=`dig +short $1 | awk '{print; exit}'`
+		firewallIP=`dig +short $1 | awk '{print; exit}'` # FOR IPV6 dig +short nul-1.binadit.com AAAA| awk '{print; exit}'
 	fi
 }
 
@@ -169,23 +169,23 @@ setup() {
   		$IPTABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   	
-  	# TCP Ports to fully open
+  	# TCP ports to be fully open on server
 	for port in $TCPPORTS ; do
   		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
   	
-  	# TCP Ports to open for incomming connections
+  	# TCP ports to open for incomming connections
   	for port in $TCPPORTS_INPUT ; do
   		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
   	done
   	
-  	# TCP Ports to open for outgoing connections
+  	# TCP ports to open for outgoing connections
   	for port in $TCPPORTS_OUTPUT ; do
   		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
   	done
   	
-  	# UDP Ports to fully open
+  	# UDP ports to be fully open on server
 	for port in $UDPPORTS ; do
 		$IPTABLES -A INPUT -p udp --dport $port -j ACCEPT
 		$IPTABLES -A OUTPUT -p udp --dport $port -j ACCEPT
@@ -279,28 +279,32 @@ setup() {
   		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
-  
+  	
+  	# TCP ports to be fully open on server
 	for port in $TCPPORTS ; do
   		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
- 
-	for port in $UDPPORTS ; do
+  	
+  	# UDP ports to be fully open on server
+  	for port in $UDPPORTS ; do
 		$IP6TABLES -A INPUT -p udp --dport $port -j ACCEPT
 		$IP6TABLES -A OUTPUT -p udp --dport $port -j ACCEPT
 	done
 	
+	# Add IP ranges with FULL access to server
 	for ip in $DMZS_IPv6 ; do
 		$IP6TABLES -A INPUT -m iprange --src-range $ip -j ACCEPT
 		$IP6TABLES -A OUTPUT -m iprange --dst-range $ip -j ACCEPT
 	done
 	
+	# Add IP ranges with NO access to server
 	for ip in $BLACKLIST_IPv6 ; do
     	$IP6TABLES -A INPUT -s $ip -j DROP
     	$IP6TABLES -A OUTPUT -s $ip -j DROP
     done
 	
-	# Multicast
+	# Multicast option for loadbalancers and cluster configs
 	if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
 		$IP6TABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
 		$IP6TABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
@@ -330,6 +334,7 @@ case "$1" in
   restart)
     echo "Stopping firewall..."
     purge
+    echo "Starting firewall..."
     setup
     ;;
   status)
