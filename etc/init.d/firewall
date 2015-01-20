@@ -150,7 +150,7 @@ setup() {
 	$IPTABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 	
 	# NAT ROUTING
-	if [ $NATROUTER_ENABLE == "TRUE" ]; then
+	if [ "$NATROUTER_ENABLE" == "TRUE" ]; then
 		echo 1 > /proc/sys/net/ipv4/ip_forward
 		$IPTABLES -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 		$IPTABLES -A FORWARD -i eth1 -j ACCEPT
