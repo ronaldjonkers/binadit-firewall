@@ -6,220 +6,321 @@
 ## 	Just added IPv6 | june 2013
 ## 	DMZ IPv6 | sept 2013
 ## 	Blacklist ipv6 | nov 2013
-## 	Added ips for SSH Access | feb 2014
-## 	IP range dmz in- and output | mrt 2014
-## 	IP range dmz fix voor IPv6 | may 2014
-## 	ICMP types activated voor IPv4  | nov 2014
-## 	Added multicast enable option | nov 2014
-##  Added SSH port detection
+##	Added ips for SSH Access | feb 2014
+##	IP range dmz in- and output | mrt 2014
+##	IP range dmz fix voor IPv6 | may 2014
+##	ICMP types activated voor IPv4  | nov 2014
+##	Added multicast enable option | nov 2014
+##	Added SSH port detection | 16 jan 2015
+##	Complete redesign of script | 17 jan 2015
+##	Added full Ubuntu and Debian support | 19 jan 2015
+##	Added tcp outgoing or ingoing only option and NAT routing | 20 jan 2015
 ##
-## TODO
-##
-## Some sort of DDOS attack prevention
-## -A INPUT -p tcp --dport 80 -m limit --limit 25/minute --limit-burst 100 -j ACCEPT
 #
 #chkconfig: 345 99 01
+#
+#
+### BEGIN INIT INFO
+# Provides:        firewall
+# Required-Start:  mountkernfs $local_fs
+# Required-Stop:   $local_fs
+# Default-Start:   2 3 4 5
+# Default-Stop:    0 1 6
+# Short-Description: Firewall
+### END INIT INFO
 
-SERVICE=`which service`
-iptablesFile="/etc/sysconfig/iptables"
-ip6tablesFile="/etc/sysconfig/ip6tables"
+CONFIGFOLDER="/etc/firewall.d"
 SSHPORT=`grep "Port " /etc/ssh/sshd_config | awk '{print $2}'`
+IPTABLES=`which iptables`
+IP6TABLES=`which ip6tables`
+IPTABLESSAVE=`which iptables-save`
+IP6TABLESSAVE=`which ip6tables-save`
+SERVICE=`which service`
+SSHACCESSnew=""
+DMZSnew=""
 
-if [ -f /etc/debian_version ]; then
-	iptablesFile="/etc/iptables/rules.v4"
-	ip6tablesFile="/etc/iptables/rules.v6"
-fi
+function setup() {
+	if [ ! -d "$CONFIGFOLDER" ]; then
+		mkdir $CONFIGFOLDER
+		
+		echo "# This file is required and is processed by /etc/init.d/firewall
+TCPPORTS=\"22 80 443\"			# TCP ports to open. example: 21 22 80 443 20000:25000
+TCPPORTS_INPUT=\"\"			# TCP ports, only incomming
+TCPPORTS_OUTPUT=\"123\"		# TCP ports, only outgoing
+UDPPORTS=\"\"   			# UDP ports to open
+DMZS=\"\"  					# IP, hostname and/or IP blocks that should have full access
+SSHACCESS=\"\" 				# IP addresses with ssh access
+SSHACCESS_IPv6=\"\"  			# IP addresses with ssh access, NO HOSTNAMES!!
+DMZRANGE=\"\"    				# ALLOW range of ip addresses. example: 65.208.151.1-65.208.151.254
+BLACKLIST=\"\"     			# IP's that can never access server
+BLOCKRANGE=\"\"    			# Block range of ip addresses. example: 65.208.151.1-65.208.151.254
+DMZS_IPv6=\"\"     			# IPs and blocks that should have full access. example: 2091:1af8:4400:b070:0000:0000:0000:0000-2091:1af8:4400:b070:ffff:ffff:ffff:ffff
+BLACKLIST_IPv6=\"\"    		# IP's that can never access server
+MULTICAST_ENABLE=\"TRUE\"			# Enable multicast traffic
+NATROUTER_ENABLE=\"FALSE\"		# Enable multicast traffic" > $CONFIGFOLDER/host.conf
 
-source /etc/firewall.d/host.conf
+		echo "Config ${CONFIGFOLDER}/host.conf first, before starting firewall"
+		exit 1
+	fi
+}
+
+# Check if firewall is correctly installed
+setup
+
+#OS CHECK
+	if [ -f /usr/bin/lsb_release ]; then
+		distro=`/usr/bin/lsb_release -a | grep "Distributor ID" | awk '{print $3}'`
+		if [ $distro == "Ubuntu" ] || [ $distro == "Debian" ]; then
+			echo "We are using Debian or Ubuntu"
+			iptablesFile="/etc/iptables/rules.v4"
+			ip6tablesFile="/etc/iptables/rules.v6"
+			IPTABLESSERVICE="iptables-persistent"
+			IP6TABLESSERVICE=""
+			if [ ! -f $iptablesFile ]; then
+				aptitude -y install iptables-persistent
+			fi
+		fi
+	fi
+	
+	if [ -f /etc/redhat-release ]; then
+		echo "We are using Centos, Redhat or Fedora"
+		iptablesFile="/etc/sysconfig/iptables"
+		ip6tablesFile="/etc/sysconfig/ip6tables"
+		IPTABLESSERVICE="iptables"
+		IP6TABLESSERVICE="ip6tables"
+	fi
+
+# Load config file
+source $CONFIGFOLDER/host.conf
+
+function f_is_ip(){
+	IP="`echo "$1" | /bin/egrep "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"`"
+	if [ "$IP" != "" ]
+	then
+		firewallIP=$1
+	else
+		firewallIP=`dig +short $1 | awk '{print; exit}'`
+	fi
+}
+
+function changeVariables() {
+	for ip in $SSHACCESS; do
+		f_is_ip $ip
+  		SSHACCESSnew="$SSHACCESSnew $firewallIP"
+  	done
+  	for ip in $DMZS; do
+		f_is_ip $ip
+  		DMZSnew="$DMZSnew $firewallIP"
+  	done
+}
 
 purge() {
-  echo -n "Firewall: Purging and allowing all traffic"
-  $SERVICE iptables stop
-  $SERVICE ip6tables stop
-  echo
+	echo "Firewall: Purging and allowing all traffic"
+		
+	if [ -f /etc/redhat-release ]; then
+		$SERVICE $IPTABLESSERVICE stop
+		$SERVICE $IP6TABLESSERVICE stop
+	else 
+		$SERVICE $IPTABLESSERVICE flush
+	fi
+	
+	echo "" > $iptablesFile
+	echo "" > $ip6tablesFile
 }
 
 setup() {
-  $SERVICE iptables stop  
-  touch $iptablesFile
-  echo "# Firewall configuration written by /etc/init.d/firewall
-# To Add ports or IP addresses, edit /etc/firewall.d/host.conf
-#
-# Firewall written by Ronald Jonkers - binadit NL 2013
-#
-*filter
-:INPUT DROP [0:0]
-:FORWARD DROP [6:425]
-:OUTPUT DROP [234:310548]
-:LOGGING - [0:0]
-#LOCALHOST
--A INPUT -i lo -j ACCEPT
--A OUTPUT -o lo -j ACCEPT" > $iptablesFile
+	$SERVICE $IPTABLESSERVICE start
+	#$SERVICE $IP6TABLES start
+	echo "Firewall: Setup traffic filtering"
+	
+	changeVariables
 
-  echo "-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT  
-# Open DNS ports
--A OUTPUT -p udp --dport 53 -j ACCEPT
--A INPUT -p udp --dport 53 -j ACCEPT
--A OUTPUT -p tcp --dport 53 -j ACCEPT
--A INPUT -p tcp --dport 53 -j ACCEPT" >> $iptablesFile
-  for port in $TCPPORTS ; do
-    echo "-A INPUT -p tcp --dport $port -j ACCEPT
--A OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
-  done
+# IP4TABLES	
+	# Default actions
+	$IPTABLES -P INPUT DROP
+	$IPTABLES -P FORWARD DROP
+	$IPTABLES -P OUTPUT DROP
+	
+	# Localhost
+	$IPTABLES -A INPUT -i lo -j ACCEPT
+	$IPTABLES -A OUTPUT -o lo -j ACCEPT
+	
+	# Default state
+	$IPTABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	$IPTABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	
+	# NAT ROUTING
+	if [ $NATROUTER_ENABLE == "TRUE" ]; then
+		echo 1 > /proc/sys/net/ipv4/ip_forward
+		$IPTABLES -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+		$IPTABLES -A FORWARD -i eth1 -j ACCEPT
+		$IPTABLES -A FORWARD -o eth1 -j ACCEPT
+	fi
+	
+	# Open DNS
+	$IPTABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
+	$IPTABLES -A INPUT  -p udp --dport 53 -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
+	$IPTABLES -A INPUT  -p tcp --dport 53 -j ACCEPT
+	
+	# SSH access to server
+	for ip in $SSHACCESSnew; do
+  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  	done
+  	
+  	# TCP Ports to fully open
+	for port in $TCPPORTS ; do
+  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
+  	done
+  	
+  	# TCP Ports to open for incomming connections
+  	for port in $TCPPORTS_INPUT ; do
+  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  	done
+  	
+  	# TCP Ports to open for outgoing connections
+  	for port in $TCPPORTS_OUTPUT ; do
+  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  	done
+  	
+  	# UDP Ports to fully open
+	for port in $UDPPORTS ; do
+		$IPTABLES -A INPUT -p udp --dport $port -j ACCEPT
+		$IPTABLES -A OUTPUT -p udp --dport $port -j ACCEPT
+	done
+	
+	# Add IP addresses with FULL access to server
+	for ip in $DMZSnew ; do
+		$IPTABLES -A INPUT -s $ip -j ACCEPT
+		$IPTABLES -A OUTPUT -d $ip -j ACCEPT
+	done
+	
+	# Add IP ranges with FULL access to server
+	for ip in $DMZRANGE ; do
+		$IPTABLES -A INPUT -m iprange --src-range $ip -j ACCEPT
+		$IPTABLES -A OUTPUT -m iprange --dst-range $ip -j ACCEPT
+	done
+	
+	# Add IP addresses with NO access to server
+	for ip in $BLACKLIST ; do
+    	$IPTABLES -A INPUT -s $ip -j DROP
+    	$IPTABLES -A OUTPUT -s $ip -j DROP
+    done
+    
+    # Add IP ranges with NO access to server
+	for ip in $BLOCKRANGE ; do
+    	$IPTABLES -A INPUT -m iprange --src-range $ip -j DROP
+		$IPTABLES -A OUTPUT -m iprange --src-range $ip -j DROP
+	done
+	
+	# Multicast option for loadbalancers and cluster configs
+	if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+		$IPTABLES -A INPUT -s 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A INPUT -d 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A OUTPUT -s 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A OUTPUT -d 224.0.0.0/4 -j ACCEPT
+		$IPTABLES -A INPUT -s 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -d 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -s 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -d 240.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -s 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -d 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -s 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A OUTPUT -d 239.0.0.0/5 -j ACCEPT
+		$IPTABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IPTABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+		$IPTABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IPTABLES -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
+	fi
+	
+	# OPEN outgoing SMTP with spam limiter
+	$IPTABLES -A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
+	$IPTABLES -A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
+	
+	# Important ICMP options
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type fragmentation-needed -j ACCEPT
+	$IPTABLES -A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT
+	#$IPTABLES -A INPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	#$IPTABLES -A INPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	
+	# Outgoing PING allowed
+	$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
+	$IPTABLES -A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
+	
+	$IPTABLESSAVE > $iptablesFile
+	
+# IP6TABLES
+	
+	# Default actions
+	$IP6TABLES -P INPUT DROP
+	$IP6TABLES -P FORWARD DROP
+	$IP6TABLES -P OUTPUT DROP
+	
+	# Localhost
+	$IP6TABLES -A INPUT -i lo -j ACCEPT
+	$IP6TABLES -A OUTPUT -o lo -j ACCEPT
+	
+	# Default state
+	$IP6TABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	$IP6TABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+	
+	# Open DNS
+	$IP6TABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
+	$IP6TABLES -A INPUT  -p udp --dport 53 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp --dport 53 -j ACCEPT
+	$IP6TABLES -A INPUT  -p tcp --dport 53 -j ACCEPT
+	
+	# SSH access to server
+	for ip in $SSHACCESS_IPv6; do
+  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  	done
   
-  for port in $TCPPORTS_INPUT ; do
-    echo "-A INPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
-  done
-  for port in $TCPPORTS_OUTPUT ; do
-    echo "-A OUTPUT -p tcp --dport $port -j ACCEPT" >> $iptablesFile
-  done
-  
-  for ip in $SSHACCESS; do
-    echo "-A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
--A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT" >> $iptablesFile
-  done
-  echo "# Open UDP ports" >> $iptablesFile
-  for port in $UDPPORTS ; do
-    echo "-A INPUT -p udp --dport $port -j ACCEPT
--A OUTPUT -p udp --dport $port -j ACCEPT" >> $iptablesFile
-  done
-  echo "# Open IP addresses" >> $iptablesFile
-  for ip in $DMZS ; do
-    echo "-A INPUT -s $ip -j ACCEPT
--A OUTPUT -d $ip -j ACCEPT" >> $iptablesFile
-  done
-  for ip in $DMZRANGE ; do
-    echo "-A INPUT -m iprange --src-range $ip -j ACCEPT
--A OUTPUT -m iprange --dst-range $ip -j ACCEPT" >> $iptablesFile
-  done
-  echo "# Blocked IP addresses" >> $iptablesFile
-  for ip in $BLACKLIST ; do
-    echo "-A INPUT -s $ip -j DROP
--A OUTPUT -s $ip -j DROP" >> $iptablesFile
-  done
-  echo "# Blocked IP ranges" >> $iptablesFile
-  for ip in $BLOCKRANGE ; do
-    echo "-A INPUT -m iprange --src-range $ip -j DROP
--A OUTPUT -m iprange --src-range $ip -j DROP" >> $iptablesFile
-  done
+	for port in $TCPPORTS ; do
+  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
+  	done
+ 
+	for port in $UDPPORTS ; do
+		$IP6TABLES -A INPUT -p udp --dport $port -j ACCEPT
+		$IP6TABLES -A OUTPUT -p udp --dport $port -j ACCEPT
+	done
+	
+	for ip in $DMZS_IPv6 ; do
+		$IP6TABLES -A INPUT -m iprange --src-range $ip -j ACCEPT
+		$IP6TABLES -A OUTPUT -m iprange --dst-range $ip -j ACCEPT
+	done
+	
+	for ip in $BLACKLIST_IPv6 ; do
+    	$IP6TABLES -A INPUT -s $ip -j DROP
+    	$IP6TABLES -A OUTPUT -s $ip -j DROP
+    done
+	
+	# Multicast
+	if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+		$IP6TABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IP6TABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+		$IP6TABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
+		$IP6TABLES -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
+	fi
+	
+	# OPEN outgoing SMTP with spam limiter
+	$IP6TABLES -A OUTPUT -d ::1 -p tcp -m tcp --dport 25 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
+	
+	$IP6TABLESSAVE > $ip6tablesFile
 
-if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
-  echo "# Multicast
-#-A INPUT -d 224.0.0.0/8 -j ACCEPT
-#-A OUTPUT -d 224.0.0.0/8 -j ACCEPT
-#-I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
-#-I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
--A INPUT -m pkttype --pkt-type multicast -j ACCEPT
--A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
--A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
--A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT" >> $iptablesFile
-fi
-
-echo "# SPAM security" >> $iptablesFile
-echo "-A OUTPUT -d 127.0.0.1 -p tcp -m tcp --dport 25 -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner mail -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --gid-owner postfix -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -m limit --limit 10/sec -m owner --uid-owner root -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp-port-unreachable" >> $iptablesFile
-
-  echo '# Enable ICMP
--A INPUT -p icmp -m icmp --icmp-type host-unreachable -j ACCEPT
--A INPUT -p icmp -m icmp --icmp-type port-unreachable -j ACCEPT
--A INPUT -p icmp -m icmp --icmp-type fragmentation-needed -j ACCEPT
--A INPUT -p icmp -m icmp --icmp-type source-quench -j ACCEPT
-#-A INPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
-#-A INPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
--A OUTPUT -p icmp -m icmp --icmp-type 8 -j ACCEPT
--A OUTPUT -p icmp -m icmp --icmp-type 0 -j ACCEPT
-
-# LOGGING
--A INPUT -j LOGGING
--A LOGGING -m limit --limit 2/min -j LOG --log-prefix "IPTables Packet Dropped: " --log-level 7
--A LOGGING -j DROP
-'  >> $iptablesFile
-  
-  echo "COMMIT" >> $iptablesFile
-  
-  $SERVICE iptables start
-  
-# IPv6 FIREWALL
-  $SERVICE ip6tables stop
-  /bin/touch $ip6tablesFile
-  echo "# Firewall configuration written by /etc/init.d/firewall.sh
-# To Add ports or IP addresses, edit /etc/firewall.d/host.conf
-#
-# Firewall written by Ronald Jonkers - binadit NL 2013
-#
-*filter
-:INPUT DROP [0:0]
-:FORWARD DROP [0:0]
-:OUTPUT DROP [0:0]
-#LOCALHOST
--A INPUT -i lo -j ACCEPT
--A OUTPUT -o lo -j ACCEPT" > $ip6tablesFile
-
-  echo "# Open TCP ports
--A INPUT -m state --state ESTABLISHED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED -j ACCEPT" >> $ip6tablesFile
-  for port in $TCPPORTS ; do
-    echo "-A INPUT -p tcp --dport $port -j ACCEPT
--A OUTPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
-  done
-  
-  echo "# Open TCP incomming ports" >> $ip6tablesFile
-  for port in $TCPPORTS_INPUT ; do
-    echo "-A INPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
-  done
-  echo "# Open TCP outgoing ports" >> $ip6tablesFile
-  for port in $TCPPORTS_OUTPUT ; do
-    echo "-A OUTPUT -p tcp --dport $port -j ACCEPT" >> $ip6tablesFile
-  done
-  
-  
-  echo "# Open UDP ports" >> $ip6tablesFile
-  for port in $UDPPORTS ; do
-    echo "-A INPUT -p udp --dport $port -j ACCEPT
--A OUTPUT -p udp --dport $port -j ACCEPT" >> $ip6tablesFile
-  done
-  echo "# Open IP addresses" >> $ip6tablesFile
-  for ip in $DMZS_IPv6 ; do
-    echo "-A INPUT -m iprange --src-range $ip -j ACCEPT
--A OUTPUT -m iprange --dst-range $ip -j ACCEPT" >> $ip6tablesFile
-  done
-  echo "# Blocked IP addresses" >> $ip6tablesFile
-  for ip in $BLACKLIST_IPv6 ; do
-    echo "-A INPUT -s $ip -j DROP" >> $ip6tablesFile
-  done
-
-  if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
-  echo "# Multicast
-#-I INPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
-#-I OUTPUT -p udp -m state --state NEW -m multiport --dports 5404,5405 -j ACCEPT 
--A INPUT -m pkttype --pkt-type multicast -j ACCEPT
--A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
--A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
--A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT" >> $iptablesFile
-fi
-  
-  echo "# SPAM security" >> $ip6tablesFile
-  echo "-A OUTPUT -d ::1 -p tcp -m tcp --dport 25 -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -m owner --gid-owner mail -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -m owner --gid-owner postfix -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -m owner --uid-owner root -j ACCEPT
--A OUTPUT -p tcp -m tcp --dport 25 -j REJECT --reject-with icmp6-adm-prohibited" >> $ip6tablesFile
-  
-  echo "COMMIT" >> $ip6tablesFile
-  
-  $SERVICE ip6tables start
-  
-  
+    echo ""
+    echo ""
 }
 
 case "$1" in
   start)
     echo "Starting firewall..."
-    purge
     setup
     ;;
   stop)
@@ -227,8 +328,9 @@ case "$1" in
     purge
     ;;
   restart)
-    $0 stop
-    $0 start
+    echo "Stopping firewall..."
+    purge
+    setup
     ;;
   status)
     iptables -n -L
