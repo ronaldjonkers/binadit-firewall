@@ -129,6 +129,9 @@ purge() {
 }
 
 setup() {
+	
+	/sbin/modprobe ip_conntrack
+/sbin/modprobe ip_conntrack_ftp
 	$SERVICE $IPTABLESSERVICE start
 	#$SERVICE $IP6TABLES start
 	echo "Firewall: Setup traffic filtering"
@@ -176,11 +179,13 @@ setup() {
   	# TCP ports to open for incomming connections
   	for port in $TCPPORTS_INPUT ; do
   		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
   	done
   	
   	# TCP ports to open for outgoing connections
   	for port in $TCPPORTS_OUTPUT ; do
-  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
   	done
   	
   	# UDP ports to be fully open on server
@@ -284,6 +289,18 @@ setup() {
   		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
   	
+  	# TCP ports to open for incomming connections
+  	for port in $TCPPORTS_INPUT ; do
+  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
+  	done
+  	
+  	# TCP ports to open for outgoing connections
+  	for port in $TCPPORTS_OUTPUT ; do
+  		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
+  	done
+  	
   	# UDP ports to be fully open on server
   	for port in $UDPPORTS ; do
 		$IP6TABLES -A INPUT -p udp --dport $port -j ACCEPT
@@ -315,7 +332,11 @@ setup() {
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
 	
 	$IP6TABLESSAVE > $ip6tablesFile
-
+	
+	
+	# IP_CONNTRACK modules
+	modprobe ip_conntrack_ftp
+	
     echo ""
     echo ""
 }

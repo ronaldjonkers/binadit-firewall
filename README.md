@@ -8,4 +8,7 @@ How to install?
 
 Download files and place them in your /etc/ folder. Make /etc/init.d/firewall executable: chmod +x /etc/init.d/firewall
 
-To automaticly start firewall on boot: chkconfig firewall on
+To automaticly start firewall on boot: 
+
+CENTOS/FEDORA: chkconfig firewall on
+UBUNTU/DEBIAN: update-rc.d firewall defaults
