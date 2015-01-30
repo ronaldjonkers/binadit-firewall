@@ -47,7 +47,7 @@ function setup() {
 TCPPORTS=\"22 80 443\"			# TCP ports to open. example: 21 22 80 443 20000:25000
 TCPPORTS_INPUT=\"\"			# TCP ports, only incomming
 TCPPORTS_OUTPUT=\"123\"		# TCP ports, only outgoing
-UDPPORTS=\"\"   			# UDP ports to open
+UDPPORTS=\"123\"   			# UDP ports to open
 DMZS=\"\"  					# IP, hostname and/or IP blocks that should have full access
 SSHACCESS=\"\" 				# IP addresses with ssh access
 SSHACCESS_IPv6=\"\"  			# IP addresses with ssh access, NO HOSTNAMES!!
@@ -187,6 +187,10 @@ setup() {
   		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   		$IPTABLES -A INPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
   	done
+  	
+  	# UDP for NTP
+  	$IPTABLES -A INPUT -p udp --dport 123 -j ACCEPT
+	$IPTABLES -A OUTPUT -p udp --dport 123 -j ACCEPT
   	
   	# UDP ports to be fully open on server
 	for port in $UDPPORTS ; do
@@ -330,6 +334,16 @@ setup() {
 	# OPEN outgoing SMTP with spam limiter
 	$IP6TABLES -A OUTPUT -d ::1 -p tcp -m tcp --dport 25 -j ACCEPT
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
+	
+	# Important ICMP
+	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT
+	$IP6TABLES -A OUTPUT -p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT
 	
 	$IP6TABLESSAVE > $ip6tablesFile
 	
