@@ -166,14 +166,16 @@ setup() {
 	
 	# SSH access to server
 	for ip in $SSHACCESSnew; do
-  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IPTABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -I INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -I OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j DROP
   	done
   	
   	# TCP ports to be fully open on server
 	for port in $TCPPORTS ; do
-  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
-  		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -I INPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -I OUTPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A INPUT -p tcp --dport $port -j DROP
   	done
   	
   	# TCP ports to open for incomming connections
@@ -283,14 +285,16 @@ setup() {
 	
 	# SSH access to server
 	for ip in $SSHACCESS_IPv6; do
-  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IP6TABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -I INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -I OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j DROP
   	done
   	
   	# TCP ports to be fully open on server
 	for port in $TCPPORTS ; do
-  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
-  		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -I INPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -I OUTPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -A INPUT -p tcp --dport $port -j DROP
   	done
   	
   	# TCP ports to open for incomming connections
@@ -336,6 +340,7 @@ setup() {
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
 	
 	# Important ICMP
+	$IP6TABLES -A INPUT -p icmpv6 -j ACCEPT
 	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT
 	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT
 	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT
