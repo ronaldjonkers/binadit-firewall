@@ -166,16 +166,14 @@ setup() {
 	
 	# SSH access to server
 	for ip in $SSHACCESSnew; do
-  		$IPTABLES -I INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IPTABLES -I OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j DROP
+  		$IPTABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   	
   	# TCP ports to be fully open on server
 	for port in $TCPPORTS ; do
-  		$IPTABLES -I INPUT -p tcp --dport $port -j ACCEPT
-  		$IPTABLES -I OUTPUT -p tcp --dport $port -j ACCEPT
-  		$IPTABLES -A INPUT -p tcp --dport $port -j DROP
+  		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
   	
   	# TCP ports to open for incomming connections
@@ -285,16 +283,14 @@ setup() {
 	
 	# SSH access to server
 	for ip in $SSHACCESS_IPv6; do
-  		$IP6TABLES -I INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IP6TABLES -I OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
-  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j DROP
+  		$IP6TABLES -A INPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $SSHPORT -s $ip -j ACCEPT
   	done
   	
   	# TCP ports to be fully open on server
 	for port in $TCPPORTS ; do
-  		$IP6TABLES -I INPUT -p tcp --dport $port -j ACCEPT
-  		$IP6TABLES -I OUTPUT -p tcp --dport $port -j ACCEPT
-  		$IP6TABLES -A INPUT -p tcp --dport $port -j DROP
+  		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
+  		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
   	
   	# TCP ports to open for incomming connections
