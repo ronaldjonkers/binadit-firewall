@@ -45,7 +45,7 @@ function setup() {
 		
 		echo "# This file is required and is processed by /etc/init.d/firewall
 TCPPORTS=\"22 80 443\"			# TCP ports to open. example: 21 22 80 443 20000:25000
-TCPPORTS_INPUT=\"\"			# TCP ports, only incomming
+TCPPORTS_INPUT=\"\"			# TCP ports, only incoming
 TCPPORTS_OUTPUT=\"123\"		# TCP ports, only outgoing
 UDPPORTS=\"123\"   			# UDP ports to open
 DMZS=\"\"  					# IP, hostname and/or IP blocks that should have full access
@@ -120,8 +120,12 @@ purge() {
 	if [ -f /etc/redhat-release ]; then
 		$SERVICE $IPTABLESSERVICE stop
 		$SERVICE $IP6TABLESSERVICE stop
-		#/sbin/ip6tables -F
-		#/sbin/ip6tables -X
+		$IP6TABLES -F
+		$IP6TABLES -X
+		$IP6TABLES -Z
+		$IP6TABLES -P INPUT ACCEPT
+		$IP6TABLES -P OUTPUT ACCEPT
+		$IP6TABLES -P FORWARD ACCEPT
 	else 
 		$SERVICE $IPTABLESSERVICE flush
 	fi
@@ -178,7 +182,7 @@ setup() {
   		$IPTABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
   	done
   	
-  	# TCP ports to open for incomming connections
+  	# TCP ports to open for incoming connections
   	for port in $TCPPORTS_INPUT ; do
   		$IPTABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IPTABLES -A OUTPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -289,9 +293,9 @@ setup() {
 	for port in $TCPPORTS ; do
   		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --dport $port -j ACCEPT
-  	done
-  	
-  	# TCP ports to open for incomming connections
+  	done 	
+ 	
+  	# TCP ports to open for incoming connections
   	for port in $TCPPORTS_INPUT ; do
   		$IP6TABLES -A INPUT -p tcp --dport $port -j ACCEPT
   		$IP6TABLES -A OUTPUT -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -327,6 +331,8 @@ setup() {
 		$IP6TABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
 		$IP6TABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
 		$IP6TABLES -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
+		$IP6TABLES -A INPUT -d ff00::/8 -j ACCEPT
+		$IP6TABLES -A OUTPUT -d ff00::/8 -j ACCEPT
 	fi
 	
 	# OPEN outgoing SMTP with spam limiter
