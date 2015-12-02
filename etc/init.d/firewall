@@ -120,6 +120,8 @@ purge() {
 	if [ -f /etc/redhat-release ]; then
 		$SERVICE $IPTABLESSERVICE stop
 		$SERVICE $IP6TABLESSERVICE stop
+		#/sbin/ip6tables -F
+		#/sbin/ip6tables -X
 	else 
 		$SERVICE $IPTABLESSERVICE flush
 	fi
@@ -232,10 +234,6 @@ setup() {
 		$IPTABLES -A INPUT -d 240.0.0.0/5 -j ACCEPT
 		$IPTABLES -A OUTPUT -s 240.0.0.0/5 -j ACCEPT
 		$IPTABLES -A OUTPUT -d 240.0.0.0/5 -j ACCEPT
-		$IPTABLES -A INPUT -s 239.0.0.0/5 -j ACCEPT
-		$IPTABLES -A INPUT -d 239.0.0.0/5 -j ACCEPT
-		$IPTABLES -A OUTPUT -s 239.0.0.0/5 -j ACCEPT
-		$IPTABLES -A OUTPUT -d 239.0.0.0/5 -j ACCEPT
 		$IPTABLES -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
 		$IPTABLES -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
 		$IPTABLES -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
