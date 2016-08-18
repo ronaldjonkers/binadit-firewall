@@ -118,8 +118,13 @@ purge() {
 	echo "Firewall: Purging and allowing all traffic"
 		
 	if [ -f /etc/redhat-release ]; then
-		$SERVICE $IPTABLESSERVICE stop
-		$SERVICE $IP6TABLESSERVICE stop
+		$IPTABLES -F
+		$IPTABLES -X
+		$IPTABLES -Z
+		$IPTABLES -P INPUT ACCEPT
+		$IPTABLES -P OUTPUT ACCEPT
+		$IPTABLES -P FORWARD ACCEPT
+		
 		$IP6TABLES -F
 		$IP6TABLES -X
 		$IP6TABLES -Z
@@ -195,7 +200,7 @@ setup() {
   	done
   	
   	# UDP for NTP
-  	$IPTABLES -A INPUT -p udp --dport 123 -j ACCEPT
+  	#$IPTABLES -A INPUT -p udp --dport 123 -j ACCEPT
 	$IPTABLES -A OUTPUT -p udp --dport 123 -j ACCEPT
   	
   	# UDP ports to be fully open on server
