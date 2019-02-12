@@ -223,14 +223,14 @@ setup() {
 	
 	# Add IP addresses with NO access to server
 	for ip in $BLACKLIST ; do
-    	$IPTABLES -A INPUT -s $ip -j DROP
-    	$IPTABLES -A OUTPUT -s $ip -j DROP
+    	$IPTABLES -I INPUT -s $ip -j DROP
+    	$IPTABLES -I OUTPUT -s $ip -j DROP
     done
     
     # Add IP ranges with NO access to server
 	for ip in $BLOCKRANGE ; do
-    	$IPTABLES -A INPUT -m iprange --src-range $ip -j DROP
-		$IPTABLES -A OUTPUT -m iprange --src-range $ip -j DROP
+    	$IPTABLES -I INPUT -m iprange --src-range $ip -j DROP
+		$IPTABLES -I OUTPUT -m iprange --src-range $ip -j DROP
 	done
 	
 	# Multicast option for loadbalancers and cluster configs
@@ -345,6 +345,8 @@ setup() {
 	$IP6TABLES -A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
 	
 	# Important ICMP
+	$IP6TABLES -A INPUT -p ipv6-icmp -j ACCEPT
+    $IP6TABLES -A OUTPUT -p ipv6-icmp -j ACCEPT
 	$IP6TABLES -A INPUT -p icmpv6 -j ACCEPT
 	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT
 	$IP6TABLES -A INPUT -p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT
