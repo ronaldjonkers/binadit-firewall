@@ -29,19 +29,27 @@
 # Short-Description: Firewall
 ### END INIT INFO
 
+set -euo pipefail
+
 CONFIGFOLDER="/etc/firewall.d"
-SSHPORT=`grep "Port " /etc/ssh/sshd_config | awk '{print $2}'`
-IPTABLES=`which iptables`
-IP6TABLES=`which ip6tables`
-IPTABLESSAVE=`which iptables-save`
-IP6TABLESSAVE=`which ip6tables-save`
-SERVICE=`which service`
+SSHPORT=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n1 || true)
+SSHPORT=${SSHPORT:-22}
+IPTABLES=$(command -v iptables || true)
+IP6TABLES=$(command -v ip6tables || true)
+IPTABLESSAVE=$(command -v iptables-save || true)
+IP6TABLESSAVE=$(command -v ip6tables-save || true)
+SERVICE=$(command -v service || true)
+FIREWALL_CMD=$(command -v firewall-cmd || true)
 SSHACCESSnew=""
 DMZSnew=""
+iptablesFile="/etc/iptables/rules.v4"
+ip6tablesFile="/etc/iptables/rules.v6"
+IPTABLESSERVICE="iptables-persistent"
+IP6TABLESSERVICE=""
 
-function setup() {
+ensure_config() {
 	if [ ! -d "$CONFIGFOLDER" ]; then
-		mkdir $CONFIGFOLDER
+		mkdir "$CONFIGFOLDER"
 		
 		echo "# This file is required and is processed by /etc/init.d/firewall
 TCPPORTS=\"22 80 443\"			# TCP ports to open. example: 21 22 80 443 20000:25000
@@ -57,7 +65,9 @@ BLOCKRANGE=\"\"    			# Block range of ip addresses. example: 65.208.151.1-65.20
 DMZS_IPv6=\"\"     			# IPs and blocks that should have full access. example: 2091:1af8:4400:b070:0000:0000:0000:0000-2091:1af8:4400:b070:ffff:ffff:ffff:ffff
 BLACKLIST_IPv6=\"\"    		# IP's that can never access server
 MULTICAST_ENABLE=\"TRUE\"			# Enable multicast traffic
-NATROUTER_ENABLE=\"FALSE\"		# Enable multicast traffic" > $CONFIGFOLDER/host.conf
+NATROUTER_ENABLE=\"FALSE\"		# Enable multicast traffic
+FIREWALL_BACKEND=\"auto\"		# auto, iptables or firewalld
+FIREWALLD_ZONE=\"public\"		# Zone used when firewalld backend is selected" > "$CONFIGFOLDER/host.conf"
 
 		echo "Config ${CONFIGFOLDER}/host.conf first, before starting firewall"
 		exit 1
@@ -65,7 +75,7 @@ NATROUTER_ENABLE=\"FALSE\"		# Enable multicast traffic" > $CONFIGFOLDER/host.con
 }
 
 # Check if firewall is correctly installed
-setup
+ensure_config
 
 #OS CHECK
 	if [ -f /usr/bin/lsb_release ]; then
@@ -77,7 +87,7 @@ setup
 			IPTABLESSERVICE="iptables-persistent"
 			IP6TABLESSERVICE=""
 			if [ ! -f $iptablesFile ]; then
-				aptitude -y install iptables-persistent
+				aptitude -y install iptables-persistent || true
 			fi
 		fi
 	fi
@@ -91,7 +101,72 @@ setup
 	fi
 
 # Load config file
-source $CONFIGFOLDER/host.conf
+source "$CONFIGFOLDER/host.conf"
+
+FIREWALL_BACKEND=${FIREWALL_BACKEND:-auto}
+FIREWALLD_ZONE=${FIREWALLD_ZONE:-public}
+
+detect_backend() {
+        local requested="$1"
+
+        if [ "$requested" == "iptables" ]; then
+                FIREWALL_BACKEND="iptables"
+        elif [ "$requested" == "firewalld" ]; then
+                if [ -n "$FIREWALL_CMD" ] && "$FIREWALL_CMD" --state &>/dev/null; then
+                        FIREWALL_BACKEND="firewalld"
+                else
+                        echo "Requested firewalld backend but firewalld is not available. Falling back to iptables."
+                        FIREWALL_BACKEND="iptables"
+                fi
+        else
+                if [ -n "$FIREWALL_CMD" ] && "$FIREWALL_CMD" --state &>/dev/null; then
+                        FIREWALL_BACKEND="firewalld"
+                else
+                        FIREWALL_BACKEND="iptables"
+                fi
+        fi
+}
+
+detect_backend "$FIREWALL_BACKEND"
+
+firewalld_cmd() {
+        local permanent="$1"
+        shift
+        if [ "$permanent" != "runtime" ]; then
+                "$FIREWALL_CMD" --permanent "$@"
+        fi
+        if [ "$permanent" != "permanent" ]; then
+                "$FIREWALL_CMD" "$@"
+        fi
+}
+
+firewalld_direct_add() {
+        local family="$1"
+        local table="$2"
+        local chain="$3"
+        local priority="$4"
+        shift 4
+        local args=("$@")
+
+        "$FIREWALL_CMD" --permanent --direct --remove-rule "$family" "$table" "$chain" "$priority" "${args[@]}" 2>/dev/null || true
+        "$FIREWALL_CMD" --direct --remove-rule "$family" "$table" "$chain" "$priority" "${args[@]}" 2>/dev/null || true
+
+        "$FIREWALL_CMD" --permanent --direct --add-rule "$family" "$table" "$chain" "$priority" "${args[@]}"
+        "$FIREWALL_CMD" --direct --add-rule "$family" "$table" "$chain" "$priority" "${args[@]}"
+}
+
+firewalld_direct_remove_all() {
+        local family
+        local chain
+        for family in ipv4 ipv6; do
+                for chain in INPUT OUTPUT FORWARD; do
+                        "$FIREWALL_CMD" --permanent --direct --remove-rules "$family" filter "$chain" 2>/dev/null || true
+                        "$FIREWALL_CMD" --direct --remove-rules "$family" filter "$chain" 2>/dev/null || true
+                done
+        done
+        "$FIREWALL_CMD" --permanent --direct --remove-rules ipv4 nat POSTROUTING 2>/dev/null || true
+        "$FIREWALL_CMD" --direct --remove-rules ipv4 nat POSTROUTING 2>/dev/null || true
+}
 
 function f_is_ip(){
 	IP="`echo "$1" | /bin/egrep "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"`"
@@ -103,51 +178,59 @@ function f_is_ip(){
 	fi
 }
 
-function changeVariables() {
-	for ip in $SSHACCESS; do
-		f_is_ip $ip
-  		SSHACCESSnew="$SSHACCESSnew $firewallIP"
-  	done
-  	for ip in $DMZS; do
-		f_is_ip $ip
-  		DMZSnew="$DMZSnew $firewallIP"
-  	done
+resolve_hostnames() {
+        SSHACCESSnew=""
+        DMZSnew=""
+        for ip in $SSHACCESS; do
+                f_is_ip "$ip"
+                SSHACCESSnew="$SSHACCESSnew $firewallIP"
+        done
+        for ip in $DMZS; do
+                f_is_ip "$ip"
+                DMZSnew="$DMZSnew $firewallIP"
+        done
 }
 
-purge() {
+iptables_purge() {
 	echo "Firewall: Purging and allowing all traffic"
 		
-	if [ -f /etc/redhat-release ]; then
-		$IPTABLES -F
-		$IPTABLES -X
-		$IPTABLES -Z
-		$IPTABLES -P INPUT ACCEPT
-		$IPTABLES -P OUTPUT ACCEPT
-		$IPTABLES -P FORWARD ACCEPT
-		
-		$IP6TABLES -F
-		$IP6TABLES -X
-		$IP6TABLES -Z
-		$IP6TABLES -P INPUT ACCEPT
-		$IP6TABLES -P OUTPUT ACCEPT
-		$IP6TABLES -P FORWARD ACCEPT
-	else 
-		$SERVICE $IPTABLESSERVICE flush
-	fi
+        if [ -f /etc/redhat-release ]; then
+                $IPTABLES -F
+                $IPTABLES -X
+                $IPTABLES -Z
+                $IPTABLES -P INPUT ACCEPT
+                $IPTABLES -P OUTPUT ACCEPT
+                $IPTABLES -P FORWARD ACCEPT
+
+                $IP6TABLES -F
+                $IP6TABLES -X
+                $IP6TABLES -Z
+                $IP6TABLES -P INPUT ACCEPT
+                $IP6TABLES -P OUTPUT ACCEPT
+                $IP6TABLES -P FORWARD ACCEPT
+        elif [ -n "$SERVICE" ] && [ -n "${IPTABLESSERVICE:-}" ]; then
+                $SERVICE $IPTABLESSERVICE flush
+        fi
 	
-	echo "" > $iptablesFile
-	echo "" > $ip6tablesFile
+        echo "" > $iptablesFile
+        echo "" > $ip6tablesFile
+
+        if [ "$NATROUTER_ENABLE" == "TRUE" ]; then
+                echo 0 > /proc/sys/net/ipv4/ip_forward
+        fi
 }
 
-setup() {
+iptables_setup() {
 	
-	/sbin/modprobe ip_conntrack
-/sbin/modprobe ip_conntrack_ftp
-	$SERVICE $IPTABLESSERVICE start
+        /sbin/modprobe ip_conntrack 2>/dev/null || true
+        /sbin/modprobe ip_conntrack_ftp 2>/dev/null || true
+        if [ -n "$SERVICE" ] && [ -n "${IPTABLESSERVICE:-}" ]; then
+                $SERVICE $IPTABLESSERVICE start
+        fi
 	#$SERVICE $IP6TABLES start
 	echo "Firewall: Setup traffic filtering"
 	
-	changeVariables
+	resolve_hostnames
 
 # IP4TABLES	
 	# Default actions
@@ -367,24 +450,242 @@ setup() {
     echo ""
 }
 
+firewalld_setup() {
+        /sbin/modprobe ip_conntrack 2>/dev/null || true
+        /sbin/modprobe ip_conntrack_ftp 2>/dev/null || true
+
+        echo "Firewall: Setup traffic filtering (firewalld)"
+
+        firewalld_direct_remove_all
+
+        if [ -n "$FIREWALLD_ZONE" ]; then
+                firewalld_cmd runtime --zone "$FIREWALLD_ZONE" --get-target >/dev/null 2>&1 || \
+                        echo "Warning: firewalld zone '$FIREWALLD_ZONE' is not defined."
+        fi
+
+        # IPv4 base rules
+        firewalld_direct_add ipv4 filter INPUT 0 -i lo -j ACCEPT
+        firewalld_direct_add ipv4 filter OUTPUT 0 -o lo -j ACCEPT
+        firewalld_direct_add ipv4 filter INPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
+        firewalld_direct_add ipv4 filter OUTPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+        if [ "$NATROUTER_ENABLE" == "TRUE" ]; then
+                echo 1 > /proc/sys/net/ipv4/ip_forward
+                firewalld_direct_add ipv4 nat POSTROUTING 0 -o eth0 -j MASQUERADE
+                firewalld_direct_add ipv4 filter FORWARD 0 -i eth1 -j ACCEPT
+                firewalld_direct_add ipv4 filter FORWARD 1 -o eth1 -j ACCEPT
+        fi
+
+        firewalld_direct_add ipv4 filter OUTPUT 2 -p udp --dport 53 -j ACCEPT
+        firewalld_direct_add ipv4 filter OUTPUT 3 -p tcp --dport 53 -j ACCEPT
+
+        for ip in $SSHACCESSnew; do
+                firewalld_direct_add ipv4 filter INPUT 10 -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 10 -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+        done
+
+        for port in $TCPPORTS; do
+                firewalld_direct_add ipv4 filter INPUT 20 -p tcp --dport $port -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 20 -p tcp --dport $port -j ACCEPT
+        done
+
+        for port in $TCPPORTS_INPUT; do
+                firewalld_direct_add ipv4 filter INPUT 30 -p tcp --dport $port -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 30 -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
+        done
+
+        for port in $TCPPORTS_OUTPUT; do
+                firewalld_direct_add ipv4 filter OUTPUT 40 -p tcp --dport $port -j ACCEPT
+                firewalld_direct_add ipv4 filter INPUT 40 -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
+        done
+
+        firewalld_direct_add ipv4 filter OUTPUT 50 -p udp --dport 123 -j ACCEPT
+
+        for port in $UDPPORTS; do
+                firewalld_direct_add ipv4 filter INPUT 60 -p udp --dport $port -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 60 -p udp --dport $port -j ACCEPT
+        done
+
+        for ip in $DMZSnew; do
+                firewalld_direct_add ipv4 filter INPUT 70 -s $ip -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 70 -d $ip -j ACCEPT
+        done
+
+        for ip in $DMZRANGE; do
+                firewalld_direct_add ipv4 filter INPUT 80 -m iprange --src-range $ip -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 80 -m iprange --dst-range $ip -j ACCEPT
+        done
+
+        for ip in $BLACKLIST; do
+                firewalld_direct_add ipv4 filter INPUT 5 -s $ip -j DROP
+                firewalld_direct_add ipv4 filter OUTPUT 5 -s $ip -j DROP
+        done
+
+        for ip in $BLOCKRANGE; do
+                firewalld_direct_add ipv4 filter INPUT 6 -m iprange --src-range $ip -j DROP
+                firewalld_direct_add ipv4 filter OUTPUT 6 -m iprange --src-range $ip -j DROP
+        done
+
+        if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+                firewalld_direct_add ipv4 filter INPUT 200 -s 224.0.0.0/4 -j ACCEPT
+                firewalld_direct_add ipv4 filter INPUT 201 -d 224.0.0.0/4 -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 200 -s 224.0.0.0/4 -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 201 -d 224.0.0.0/4 -j ACCEPT
+                firewalld_direct_add ipv4 filter INPUT 202 -s 240.0.0.0/5 -j ACCEPT
+                firewalld_direct_add ipv4 filter INPUT 203 -d 240.0.0.0/5 -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 202 -s 240.0.0.0/5 -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 203 -d 240.0.0.0/5 -j ACCEPT
+                firewalld_direct_add ipv4 filter INPUT 204 -m pkttype --pkt-type multicast -j ACCEPT
+                firewalld_direct_add ipv4 filter INPUT 205 -m pkttype --pkt-type broadcast -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 204 -m pkttype --pkt-type multicast -j ACCEPT
+                firewalld_direct_add ipv4 filter OUTPUT 205 -m pkttype --pkt-type broadcast -j ACCEPT
+        fi
+
+        firewalld_direct_add ipv4 filter OUTPUT 90 -d 127.0.0.1 -p tcp --dport 25 -j ACCEPT
+        firewalld_direct_add ipv4 filter OUTPUT 91 -p tcp --dport 25 -j ACCEPT
+
+        firewalld_direct_add ipv4 filter INPUT 95 -p icmp --icmp-type host-unreachable -j ACCEPT
+        firewalld_direct_add ipv4 filter INPUT 96 -p icmp --icmp-type port-unreachable -j ACCEPT
+        firewalld_direct_add ipv4 filter INPUT 97 -p icmp --icmp-type fragmentation-needed -j ACCEPT
+        firewalld_direct_add ipv4 filter INPUT 98 -p icmp --icmp-type source-quench -j ACCEPT
+        firewalld_direct_add ipv4 filter OUTPUT 95 -p icmp --icmp-type 8 -j ACCEPT
+        firewalld_direct_add ipv4 filter OUTPUT 96 -p icmp --icmp-type 0 -j ACCEPT
+
+        firewalld_direct_add ipv4 filter INPUT 1000 -j DROP
+        firewalld_direct_add ipv4 filter OUTPUT 1000 -j DROP
+        firewalld_direct_add ipv4 filter FORWARD 1000 -j DROP
+
+        # IPv6 rules
+        firewalld_direct_add ipv6 filter INPUT 0 -i lo -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 0 -o lo -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+        firewalld_direct_add ipv6 filter OUTPUT 2 -p udp --dport 53 -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 2 -p udp --dport 53 -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 3 -p tcp --dport 53 -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 3 -p tcp --dport 53 -j ACCEPT
+
+        for ip in $SSHACCESS_IPv6; do
+                firewalld_direct_add ipv6 filter INPUT 10 -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 10 -p tcp --dport $SSHPORT -s $ip -j ACCEPT
+        done
+
+        for port in $TCPPORTS; do
+                firewalld_direct_add ipv6 filter INPUT 20 -p tcp --dport $port -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 20 -p tcp --dport $port -j ACCEPT
+        done
+
+        for port in $TCPPORTS_INPUT; do
+                firewalld_direct_add ipv6 filter INPUT 30 -p tcp --dport $port -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 30 -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
+        done
+
+        for port in $TCPPORTS_OUTPUT; do
+                firewalld_direct_add ipv6 filter OUTPUT 40 -p tcp --dport $port -j ACCEPT
+                firewalld_direct_add ipv6 filter INPUT 40 -p tcp --dport $port -m state --state ESTABLISHED,RELATED -j ACCEPT
+        done
+
+        for port in $UDPPORTS; do
+                firewalld_direct_add ipv6 filter INPUT 60 -p udp --dport $port -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 60 -p udp --dport $port -j ACCEPT
+        done
+
+        for ip in $DMZS_IPv6; do
+                firewalld_direct_add ipv6 filter INPUT 70 -m iprange --src-range $ip -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 70 -m iprange --dst-range $ip -j ACCEPT
+        done
+
+        for ip in $BLACKLIST_IPv6; do
+                firewalld_direct_add ipv6 filter INPUT 5 -s $ip -j DROP
+                firewalld_direct_add ipv6 filter OUTPUT 5 -s $ip -j DROP
+        done
+
+        if [ "$MULTICAST_ENABLE" == "TRUE" ]; then
+                firewalld_direct_add ipv6 filter INPUT 200 -m pkttype --pkt-type multicast -j ACCEPT
+                firewalld_direct_add ipv6 filter INPUT 201 -m pkttype --pkt-type broadcast -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 200 -m pkttype --pkt-type multicast -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 201 -m pkttype --pkt-type broadcast -j ACCEPT
+                firewalld_direct_add ipv6 filter INPUT 202 -d ff00::/8 -j ACCEPT
+                firewalld_direct_add ipv6 filter OUTPUT 202 -d ff00::/8 -j ACCEPT
+        fi
+
+        firewalld_direct_add ipv6 filter OUTPUT 90 -d ::1 -p tcp --dport 25 -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 91 -p tcp --dport 25 -j ACCEPT
+
+        firewalld_direct_add ipv6 filter INPUT 95 -p ipv6-icmp -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 95 -p ipv6-icmp -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 96 -p icmpv6 -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 97 -p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 98 -p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 99 -p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter INPUT 100 -p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 96 -p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 97 -p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 98 -p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT
+        firewalld_direct_add ipv6 filter OUTPUT 99 -p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT
+
+        firewalld_direct_add ipv6 filter INPUT 1000 -j DROP
+        firewalld_direct_add ipv6 filter OUTPUT 1000 -j DROP
+        firewalld_direct_add ipv6 filter FORWARD 1000 -j DROP
+
+        "$FIREWALL_CMD" --reload
+}
+
+firewalld_purge() {
+        echo "Firewall: Purging firewalld rules"
+        firewalld_direct_remove_all
+        if [ "$NATROUTER_ENABLE" == "TRUE" ]; then
+                echo 0 > /proc/sys/net/ipv4/ip_forward
+        fi
+        "$FIREWALL_CMD" --reload
+}
+
+start_firewall() {
+        resolve_hostnames
+        if [ "$FIREWALL_BACKEND" == "firewalld" ]; then
+                firewalld_setup
+        else
+                iptables_setup
+        fi
+}
+
+stop_firewall() {
+        if [ "$FIREWALL_BACKEND" == "firewalld" ]; then
+                firewalld_purge
+        else
+                iptables_purge
+        fi
+}
+
+status_firewall() {
+        if [ "$FIREWALL_BACKEND" == "firewalld" ]; then
+                "$FIREWALL_CMD" --state
+                "$FIREWALL_CMD" --direct --get-all-rules ipv4 filter
+                "$FIREWALL_CMD" --direct --get-all-rules ipv6 filter
+        else
+                iptables -n -L
+                ip6tables -n -L
+        fi
+}
+
 case "$1" in
   start)
     echo "Starting firewall..."
-    setup
+    start_firewall
     ;;
   stop)
     echo "Stopping firewall..."
-    purge
+    stop_firewall
     ;;
   restart)
     echo "Stopping firewall..."
-    purge
+    stop_firewall
     echo "Starting firewall..."
-    setup
+    start_firewall
     ;;
   status)
-    iptables -n -L
-    ip6tables -n -L
+    status_firewall
     ;;
   *)
     echo "Usage: $0 <start|stop|restart|status>"
