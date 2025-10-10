@@ -39,6 +39,7 @@ IP6TABLES=$(command -v ip6tables || true)
 IPTABLESSAVE=$(command -v iptables-save || true)
 IP6TABLESSAVE=$(command -v ip6tables-save || true)
 SERVICE=$(command -v service || true)
+SYSTEMCTL=$(command -v systemctl || true)
 FIREWALL_CMD=$(command -v firewall-cmd || true)
 SSHACCESSnew=""
 DMZSnew=""
@@ -106,25 +107,98 @@ source "$CONFIGFOLDER/host.conf"
 FIREWALL_BACKEND=${FIREWALL_BACKEND:-auto}
 FIREWALLD_ZONE=${FIREWALLD_ZONE:-public}
 
+have_iptables() {
+        [ -n "$IPTABLES" ] && [ -n "$IPTABLESSAVE" ]
+}
+
+have_firewalld() {
+        [ -n "$FIREWALL_CMD" ]
+}
+
+ensure_firewalld_running() {
+        if ! have_firewalld; then
+                return 1
+        fi
+
+        if "$FIREWALL_CMD" --state >/dev/null 2>&1; then
+                return 0
+        fi
+
+        if [ -n "$SYSTEMCTL" ]; then
+                $SYSTEMCTL start firewalld >/dev/null 2>&1 || true
+        elif [ -n "$SERVICE" ]; then
+                $SERVICE firewalld start >/dev/null 2>&1 || true
+        fi
+
+        "$FIREWALL_CMD" --state >/dev/null 2>&1
+}
+
+print_backend_install_instructions() {
+        cat <<'EOM'
+Geen ondersteunde firewall backend gevonden. Installeer iptables of firewalld.
+RHEL / CentOS / Fedora:
+  yum install iptables-services
+  of
+  yum install firewalld
+
+Debian / Ubuntu:
+  apt-get install iptables-persistent
+  of
+  apt-get install firewalld
+EOM
+}
+
 detect_backend() {
         local requested="$1"
 
-        if [ "$requested" == "iptables" ]; then
-                FIREWALL_BACKEND="iptables"
-        elif [ "$requested" == "firewalld" ]; then
-                if [ -n "$FIREWALL_CMD" ] && "$FIREWALL_CMD" --state &>/dev/null; then
-                        FIREWALL_BACKEND="firewalld"
-                else
-                        echo "Requested firewalld backend but firewalld is not available. Falling back to iptables."
-                        FIREWALL_BACKEND="iptables"
-                fi
-        else
-                if [ -n "$FIREWALL_CMD" ] && "$FIREWALL_CMD" --state &>/dev/null; then
-                        FIREWALL_BACKEND="firewalld"
-                else
-                        FIREWALL_BACKEND="iptables"
-                fi
+        local iptables_available="false"
+        local firewalld_available="false"
+
+        if have_iptables; then
+                iptables_available="true"
         fi
+
+        if have_firewalld; then
+                firewalld_available="true"
+        fi
+
+        case "$requested" in
+                iptables)
+                        if [ "$iptables_available" == "true" ]; then
+                                FIREWALL_BACKEND="iptables"
+                        elif [ "$firewalld_available" == "true" ]; then
+                                echo "Iptables backend requested maar iptables is niet beschikbaar. Overschakelen naar firewalld."
+                                FIREWALL_BACKEND="firewalld"
+                        else
+                                echo "Iptables backend requested maar geen iptables of firewalld gevonden."
+                                print_backend_install_instructions
+                                exit 1
+                        fi
+                        ;;
+                firewalld)
+                        if [ "$firewalld_available" == "true" ]; then
+                                FIREWALL_BACKEND="firewalld"
+                        elif [ "$iptables_available" == "true" ]; then
+                                echo "Firewalld backend requested maar firewalld is niet beschikbaar. Overschakelen naar iptables."
+                                FIREWALL_BACKEND="iptables"
+                        else
+                                echo "Firewalld backend requested maar geen iptables of firewalld gevonden."
+                                print_backend_install_instructions
+                                exit 1
+                        fi
+                        ;;
+                *)
+                        if [ "$firewalld_available" == "true" ]; then
+                                FIREWALL_BACKEND="firewalld"
+                        elif [ "$iptables_available" == "true" ]; then
+                                FIREWALL_BACKEND="iptables"
+                        else
+                                echo "Geen iptables of firewalld gevonden."
+                                print_backend_install_instructions
+                                exit 1
+                        fi
+                        ;;
+        esac
 }
 
 detect_backend "$FIREWALL_BACKEND"
@@ -456,6 +530,19 @@ firewalld_setup() {
 
         echo "Firewall: Setup traffic filtering (firewalld)"
 
+        if ! ensure_firewalld_running; then
+                if have_iptables; then
+                        echo "Firewalld kan niet worden gestart. Overschakelen naar iptables backend."
+                        FIREWALL_BACKEND="iptables"
+                        iptables_setup
+                        return
+                fi
+
+                echo "Firewalld is niet beschikbaar en er is geen iptables backend om op terug te vallen."
+                print_backend_install_instructions
+                exit 1
+        fi
+
         firewalld_direct_remove_all
 
         if [ -n "$FIREWALLD_ZONE" ]; then
@@ -634,6 +721,10 @@ firewalld_setup() {
 
 firewalld_purge() {
         echo "Firewall: Purging firewalld rules"
+        if ! ensure_firewalld_running; then
+                echo "Firewalld draait niet, er zijn geen regels om te verwijderen."
+                return
+        fi
         firewalld_direct_remove_all
         if [ "$NATROUTER_ENABLE" == "TRUE" ]; then
                 echo 0 > /proc/sys/net/ipv4/ip_forward
