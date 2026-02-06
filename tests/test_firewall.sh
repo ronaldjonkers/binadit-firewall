@@ -497,6 +497,102 @@ test_security_features() {
 
     # Main script has upgrade command
     assert_contains "Main script: upgrade command"         "${SRC_DIR}/binadit-firewall.sh" "fw_upgrade"
+    assert_contains "Main script: configtest command"      "${SRC_DIR}/binadit-firewall.sh" "fw_configtest"
+    assert_contains "Main script: motd-on command"         "${SRC_DIR}/binadit-firewall.sh" "motd-on"
+    assert_contains "Main script: motd-off command"        "${SRC_DIR}/binadit-firewall.sh" "motd-off"
+}
+
+# =============================================================================
+# Test: configtest function
+# =============================================================================
+
+test_configtest() {
+    echo -e "\n${BOLD}Test: Configuration Test (configtest)${NC}"
+
+    # configtest function exists
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if declare -f configtest &>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest function exists"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest function not found"
+    fi
+
+    # Test with valid example config
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local ct_tmpfile
+    ct_tmpfile=$(mktemp)
+    if configtest "${CONFIG_DIR}/firewall.conf.example" >"$ct_tmpfile" 2>&1; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest passes on example config"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest failed on example config"
+    fi
+
+    # Test output contains 'Configuration Test'
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if grep -q "Configuration Test" "$ct_tmpfile" 2>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest output contains header"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest output missing header"
+    fi
+    rm -f "$ct_tmpfile"
+
+    # Test with nonexistent file
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if configtest "/tmp/nonexistent_binadit_config_$$" >/dev/null 2>&1; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest should fail on missing config"
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest fails on missing config"
+    fi
+
+    # Test with bad syntax config
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local bad_config
+    bad_config=$(mktemp)
+    echo 'TCP_PORTS="80 443' > "$bad_config"  # Missing closing quote
+    if configtest "$bad_config" >/dev/null 2>&1; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest should fail on syntax error"
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest fails on syntax error"
+    fi
+    rm -f "$bad_config"
+
+    # Test with invalid port
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local bad_port_config
+    bad_port_config=$(mktemp)
+    echo 'TCP_PORTS="80 99999"' > "$bad_port_config"
+    if configtest "$bad_port_config" >/dev/null 2>&1; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest should fail on invalid port"
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest fails on invalid port (99999)"
+    fi
+    rm -f "$bad_port_config"
+
+    # Test with invalid boolean
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local bad_bool_config
+    bad_bool_config=$(mktemp)
+    echo 'ICMP_ENABLE="yes"' > "$bad_bool_config"
+    if configtest "$bad_bool_config" >/dev/null 2>&1; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} configtest should fail on invalid boolean"
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} configtest fails on invalid boolean ('yes')"
+    fi
+    rm -f "$bad_bool_config"
 }
 
 # =============================================================================
@@ -511,7 +607,7 @@ test_version_consistency() {
     version_common=$(grep "BINADIT_VERSION=" "${LIB_DIR}/common.sh" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
     version_main=$(grep "binadit-firewall v" "${SRC_DIR}/binadit-firewall.sh" | head -1 | sed 's/.*v\([0-9.]*\).*/\1/' || echo "")
 
-    assert_equals "Version in common.sh" "2.1.0" "$version_common"
+    assert_equals "Version in common.sh" "2.1.1" "$version_common"
 
     # Check CHANGELOG has the version
     if [[ -f "${PROJECT_DIR}/CHANGELOG.md" ]]; then
@@ -656,6 +752,7 @@ main() {
     test_backend_functions
     test_ui_functions
     test_security_features
+    test_configtest
     test_version_consistency
     test_logging_functions
     test_resolve_passthrough

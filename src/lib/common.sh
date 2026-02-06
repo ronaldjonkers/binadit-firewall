@@ -11,7 +11,7 @@ set -euo pipefail
 # Guard against re-sourcing (readonly can only be set once)
 if [[ -z "${_BINADIT_COMMON_LOADED:-}" ]]; then
     readonly _BINADIT_COMMON_LOADED=1
-    readonly BINADIT_VERSION="2.1.0"
+    readonly BINADIT_VERSION="2.1.1"
     readonly RED='\033[0;31m'
     readonly GREEN='\033[0;32m'
     readonly YELLOW='\033[1;33m'
@@ -176,6 +176,259 @@ print_rule_summary() {
 
     echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
     echo ""
+}
+
+# =============================================================================
+# Configuration test — validates every setting with clear feedback
+# Returns 0 on success, 1 on error. Prints warnings for non-fatal issues.
+# =============================================================================
+configtest() {
+    local config_file="$1"
+    local errors=0
+    local warnings=0
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─────────────────────────────────────────────────────┐${NC}"
+    echo -e "  ${BOLD}${CYAN}│${NC}  ${BOLD}Configuration Test${NC}                                  ${BOLD}${CYAN}│${NC}"
+    echo -e "  ${BOLD}${CYAN}├─────────────────────────────────────────────────────┤${NC}"
+
+    # --- File checks ---
+    if [[ ! -f "$config_file" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}✗ Config file not found:${NC} $config_file"
+        echo -e "  ${CYAN}│${NC}    Run: ${BOLD}binadit-firewall setup${NC}"
+        echo -e "  ${CYAN}│${NC}    Or:  ${BOLD}cp ${config_file}.example ${config_file}${NC}"
+        echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+        return 1
+    fi
+
+    if [[ ! -r "$config_file" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}✗ Config file not readable${NC} (check permissions)"
+        echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+        return 1
+    fi
+
+    # Bash syntax check
+    local syntax_err
+    syntax_err=$(bash -n "$config_file" 2>&1) || true
+    if [[ -n "$syntax_err" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}✗ Bash syntax error in config:${NC}"
+        echo -e "  ${CYAN}│${NC}    $syntax_err"
+        echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+        return 1
+    fi
+    echo -e "  ${CYAN}│${NC}  ${GREEN}✓${NC} Config syntax valid"
+
+    # Source config
+    # shellcheck source=/dev/null
+    source "$config_file"
+
+    # --- Helper: validate a space-separated list of ports ---
+    _ct_check_ports() {
+        local label="$1" value="$2"
+        if [[ -z "$value" ]]; then return 0; fi
+        for p in $value; do
+            if ! is_valid_port "$p"; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ ${label}:${NC} invalid port '${BOLD}$p${NC}' (use 1-65535 or range like 8000:9000)"
+                errors=$((errors + 1))
+                return 1
+            fi
+        done
+        local count
+        count=$(echo "$value" | wc -w | tr -d ' ')
+        echo -e "  ${CYAN}│${NC}  ${GREEN}✓${NC} ${label}: ${count} port(s)"
+        return 0
+    }
+
+    # --- Helper: validate a space-separated list of hosts/IPs ---
+    _ct_check_hosts() {
+        local label="$1" value="$2"
+        if [[ -z "$value" ]]; then return 0; fi
+        for h in $value; do
+            if ! is_valid_host "$h"; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ ${label}:${NC} invalid host '${BOLD}$h${NC}' (use IP, CIDR, or hostname)"
+                errors=$((errors + 1))
+                return 1
+            fi
+        done
+        local count
+        count=$(echo "$value" | wc -w | tr -d ' ')
+        echo -e "  ${CYAN}│${NC}  ${GREEN}✓${NC} ${label}: ${count} host(s)"
+        return 0
+    }
+
+    # --- Helper: validate boolean ---
+    _ct_check_bool() {
+        local label="$1" value="$2"
+        if [[ "$value" != "true" && "$value" != "false" ]]; then
+            echo -e "  ${CYAN}│${NC}  ${RED}✗ ${label}:${NC} '${BOLD}$value${NC}' is not valid (use ${GREEN}true${NC} or ${GREEN}false${NC})"
+            errors=$((errors + 1))
+            return 1
+        fi
+        return 0
+    }
+
+    # --- Port validation ---
+    _ct_check_ports "TCP_PORTS"        "${TCP_PORTS:-}"
+    _ct_check_ports "TCP_PORTS_INPUT"  "${TCP_PORTS_INPUT:-}"
+    _ct_check_ports "TCP_PORTS_OUTPUT" "${TCP_PORTS_OUTPUT:-}"
+    _ct_check_ports "UDP_PORTS"        "${UDP_PORTS:-}"
+    _ct_check_ports "BLOCKED_TCP_PORTS" "${BLOCKED_TCP_PORTS:-}"
+    _ct_check_ports "BLOCKED_UDP_PORTS" "${BLOCKED_UDP_PORTS:-}"
+
+    # --- Host/IP validation ---
+    _ct_check_hosts "SSH_ALLOWED_IPS"  "${SSH_ALLOWED_IPS:-}"
+    _ct_check_hosts "TRUSTED_IPS"      "${TRUSTED_IPS:-}"
+    _ct_check_hosts "TRUSTED_RANGES"   "${TRUSTED_RANGES:-}"
+    _ct_check_hosts "BLACKLIST"        "${BLACKLIST:-}"
+    _ct_check_hosts "BLOCKED_RANGES"   "${BLOCKED_RANGES:-}"
+
+    # --- PORT_IP_RULES validation ---
+    if [[ -n "${PORT_IP_RULES:-}" ]]; then
+        local rule_count=0 rule_errors=0
+        local IFS_OLD="$IFS"
+        IFS=$'\n'
+        for rule in $PORT_IP_RULES; do
+            IFS="$IFS_OLD"
+            rule_count=$((rule_count + 1))
+            local proto rport rip
+            proto=$(echo "$rule" | awk -F'|' '{print $1}' | xargs)
+            rport=$(echo "$rule" | awk -F'|' '{print $2}' | xargs)
+            rip=$(echo "$rule" | awk -F'|' '{print $3}' | xargs)
+            if [[ "$proto" != "tcp" && "$proto" != "udp" ]]; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ PORT_IP_RULES:${NC} rule #${rule_count}: protocol '${BOLD}$proto${NC}' invalid (use tcp or udp)"
+                errors=$((errors + 1)); rule_errors=$((rule_errors + 1))
+            fi
+            if [[ -n "$rport" ]] && ! is_valid_port "$rport"; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ PORT_IP_RULES:${NC} rule #${rule_count}: port '${BOLD}$rport${NC}' invalid"
+                errors=$((errors + 1)); rule_errors=$((rule_errors + 1))
+            fi
+            if [[ -n "$rip" ]] && ! is_valid_host "$rip"; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ PORT_IP_RULES:${NC} rule #${rule_count}: host '${BOLD}$rip${NC}' invalid"
+                errors=$((errors + 1)); rule_errors=$((rule_errors + 1))
+            fi
+            IFS=$'\n'
+        done
+        IFS="$IFS_OLD"
+        if [[ $rule_errors -eq 0 ]]; then
+            echo -e "  ${CYAN}│${NC}  ${GREEN}✓${NC} PORT_IP_RULES: ${rule_count} rule(s)"
+        fi
+    fi
+
+    # --- PORT_FORWARD_RULES validation ---
+    if [[ -n "${PORT_FORWARD_RULES:-}" ]]; then
+        local fwd_count=0 fwd_errors=0
+        local IFS_OLD="$IFS"
+        IFS=$'\n'
+        for rule in $PORT_FORWARD_RULES; do
+            IFS="$IFS_OLD"
+            fwd_count=$((fwd_count + 1))
+            local proto ext_port int_dest
+            proto=$(echo "$rule" | awk -F'|' '{print $1}' | xargs)
+            ext_port=$(echo "$rule" | awk -F'|' '{print $2}' | xargs)
+            int_dest=$(echo "$rule" | awk -F'|' '{print $3}' | xargs)
+            if [[ "$proto" != "tcp" && "$proto" != "udp" ]]; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ PORT_FORWARD_RULES:${NC} rule #${fwd_count}: protocol '${BOLD}$proto${NC}' invalid"
+                errors=$((errors + 1)); fwd_errors=$((fwd_errors + 1))
+            fi
+            if [[ -n "$ext_port" ]] && ! is_valid_port "$ext_port"; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ PORT_FORWARD_RULES:${NC} rule #${fwd_count}: port '${BOLD}$ext_port${NC}' invalid"
+                errors=$((errors + 1)); fwd_errors=$((fwd_errors + 1))
+            fi
+            if [[ -z "$int_dest" ]]; then
+                echo -e "  ${CYAN}│${NC}  ${RED}✗ PORT_FORWARD_RULES:${NC} rule #${fwd_count}: missing destination (ip:port)"
+                errors=$((errors + 1)); fwd_errors=$((fwd_errors + 1))
+            fi
+            IFS=$'\n'
+        done
+        IFS="$IFS_OLD"
+        if [[ $fwd_errors -eq 0 ]]; then
+            echo -e "  ${CYAN}│${NC}  ${GREEN}✓${NC} PORT_FORWARD_RULES: ${fwd_count} rule(s)"
+        fi
+
+        # Port forwarding requires NAT
+        if [[ "${NAT_ENABLE:-false}" != "true" ]]; then
+            echo -e "  ${CYAN}│${NC}  ${YELLOW}⚠${NC} PORT_FORWARD_RULES set but NAT_ENABLE is not 'true' — forwarding won't work"
+            warnings=$((warnings + 1))
+        fi
+    fi
+
+    # --- Boolean options ---
+    _ct_check_bool "ICMP_ENABLE"         "${ICMP_ENABLE:-true}"
+    _ct_check_bool "MULTICAST_ENABLE"    "${MULTICAST_ENABLE:-false}"
+    _ct_check_bool "SMTP_ENABLE"         "${SMTP_ENABLE:-true}"
+    _ct_check_bool "RATE_LIMIT_ENABLE"   "${RATE_LIMIT_ENABLE:-true}"
+    _ct_check_bool "LOG_DROPPED"         "${LOG_DROPPED:-true}"
+    _ct_check_bool "NAT_ENABLE"          "${NAT_ENABLE:-false}"
+    _ct_check_bool "SYN_FLOOD_PROTECT"   "${SYN_FLOOD_PROTECT:-true}"
+    _ct_check_bool "CONN_LIMIT_ENABLE"   "${CONN_LIMIT_ENABLE:-false}"
+    _ct_check_bool "DROP_INVALID"        "${DROP_INVALID:-true}"
+    _ct_check_bool "BLOCK_COMMON_ATTACKS" "${BLOCK_COMMON_ATTACKS:-true}"
+
+    # --- Numeric options ---
+    if [[ -n "${CONN_LIMIT_PER_IP:-}" ]] && ! [[ "${CONN_LIMIT_PER_IP}" =~ ^[0-9]+$ ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}✗ CONN_LIMIT_PER_IP:${NC} '${BOLD}${CONN_LIMIT_PER_IP}${NC}' is not a number"
+        errors=$((errors + 1))
+    fi
+    if [[ -n "${CONN_RATE_PER_IP:-}" ]] && ! [[ "${CONN_RATE_PER_IP}" =~ ^[0-9]+$ ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}✗ CONN_RATE_PER_IP:${NC} '${BOLD}${CONN_RATE_PER_IP}${NC}' is not a number"
+        errors=$((errors + 1))
+    fi
+    if [[ -n "${RATE_LIMIT_BURST:-}" ]] && ! [[ "${RATE_LIMIT_BURST}" =~ ^[0-9]+$ ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}✗ RATE_LIMIT_BURST:${NC} '${BOLD}${RATE_LIMIT_BURST}${NC}' is not a number"
+        errors=$((errors + 1))
+    fi
+
+    # --- NAT interface check ---
+    if [[ "${NAT_ENABLE:-false}" == "true" ]]; then
+        if [[ -z "${NAT_EXTERNAL_IFACE:-}" ]]; then
+            echo -e "  ${CYAN}│${NC}  ${RED}✗ NAT_EXTERNAL_IFACE:${NC} required when NAT_ENABLE=true"
+            errors=$((errors + 1))
+        fi
+        if [[ -z "${NAT_INTERNAL_IFACE:-}" ]]; then
+            echo -e "  ${CYAN}│${NC}  ${RED}✗ NAT_INTERNAL_IFACE:${NC} required when NAT_ENABLE=true"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    # --- Custom rules file ---
+    if [[ -n "${CUSTOM_RULES_FILE:-}" ]] && [[ ! -f "${CUSTOM_RULES_FILE}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${YELLOW}⚠${NC} CUSTOM_RULES_FILE: '${CUSTOM_RULES_FILE}' does not exist (will be skipped)"
+        warnings=$((warnings + 1))
+    fi
+
+    # --- Warnings (non-fatal) ---
+    if [[ -z "${TCP_PORTS:-}" && -z "${TCP_PORTS_INPUT:-}" && -z "${UDP_PORTS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${YELLOW}⚠${NC} No open ports defined — only SSH and established connections will work"
+        warnings=$((warnings + 1))
+    fi
+
+    local ssh_port
+    ssh_port=$(detect_ssh_port)
+    if [[ -n "${TCP_PORTS:-}" ]] && [[ " ${TCP_PORTS} " != *" ${ssh_port} "* ]] && [[ -z "${SSH_ALLOWED_IPS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${YELLOW}⚠${NC} SSH port ${ssh_port} not in TCP_PORTS and no SSH_ALLOWED_IPS set"
+        echo -e "  ${CYAN}│${NC}    You may lose SSH access! Add ${ssh_port} to TCP_PORTS or set SSH_ALLOWED_IPS"
+        warnings=$((warnings + 1))
+    fi
+
+    # --- Summary ---
+    echo -e "  ${CYAN}├─────────────────────────────────────────────────────┤${NC}"
+    if [[ $errors -gt 0 ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}${BOLD}FAILED${NC} — ${errors} error(s), ${warnings} warning(s)"
+        echo -e "  ${CYAN}│${NC}  Fix the errors above and try again."
+        echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+        echo ""
+        return 1
+    elif [[ $warnings -gt 0 ]]; then
+        echo -e "  ${CYAN}│${NC}  ${YELLOW}${BOLD}PASSED with warnings${NC} — ${warnings} warning(s)"
+        echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+        echo ""
+        return 0
+    else
+        echo -e "  ${CYAN}│${NC}  ${GREEN}${BOLD}ALL CHECKS PASSED${NC}"
+        echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+        echo ""
+        return 0
+    fi
 }
 
 # Check if running as root

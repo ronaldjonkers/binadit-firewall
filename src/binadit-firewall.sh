@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.1.0
+# binadit-firewall v2.1.1
 # =============================================================================
 # A modern, easy-to-use Linux firewall manager with support for both
 # nftables and iptables backends.
@@ -8,7 +8,7 @@
 # Copyright (C) 2013-2026 Ronald Jonkers - binadit
 # License: GPL-2.0
 #
-# Usage: binadit-firewall {start|stop|restart|status|reload|backup|upgrade|version}
+# Usage: binadit-firewall {start|stop|restart|status|reload|configtest|backup|upgrade|motd-on|motd-off|version}
 # =============================================================================
 
 set -euo pipefail
@@ -31,27 +31,13 @@ source "${LIB_DIR}/backend_iptables.sh"
 # Main functions
 # =============================================================================
 
-# Validate the configuration file exists and is readable
+# Validate the configuration file — runs full configtest
+# On error: prints detailed feedback and aborts (firewall stays unchanged)
 validate_config() {
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        log_error "Configuration file not found: $CONFIG_FILE"
-        log_info "Run 'binadit-firewall setup' or copy the example config:"
-        log_info "  cp ${CONFIG_DIR}/firewall.conf.example ${CONFIG_FILE}"
+    if ! configtest "$CONFIG_FILE"; then
+        log_error "Configuration test failed — firewall rules NOT changed"
         exit 1
     fi
-
-    if [[ ! -r "$CONFIG_FILE" ]]; then
-        log_error "Configuration file not readable: $CONFIG_FILE"
-        exit 1
-    fi
-
-    # Basic syntax check
-    if ! bash -n "$CONFIG_FILE" 2>/dev/null; then
-        log_error "Configuration file has syntax errors: $CONFIG_FILE"
-        exit 1
-    fi
-
-    log_debug "Configuration validated: $CONFIG_FILE"
 }
 
 # Detect and use the appropriate backend
@@ -60,6 +46,17 @@ get_backend() {
     backend=$(detect_backend)
     log_info "Using firewall backend: ${BOLD}${backend}${NC}"
     echo "$backend"
+}
+
+# Run configtest standalone
+fw_configtest() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log_error "Configuration file not found: $CONFIG_FILE"
+        log_info "Run 'binadit-firewall setup' or copy the example config:"
+        log_info "  cp ${CONFIG_DIR}/firewall.conf.example ${CONFIG_FILE}"
+        exit 1
+    fi
+    configtest "$CONFIG_FILE"
 }
 
 # Start the firewall
@@ -144,6 +141,56 @@ fw_status() {
 fw_reload() {
     log_info "Reloading configuration..."
     fw_start
+}
+
+# Install MOTD script that shows firewall status on login
+fw_install_motd() {
+    require_root
+
+    local motd_script="/etc/profile.d/binadit-firewall-status.sh"
+
+    cat > "$motd_script" <<'MOTD_EOF'
+#!/bin/sh
+# binadit-firewall login status indicator
+# Shows a subtle one-line status on login so admins know if the firewall is active.
+# Remove with: binadit-firewall motd-off
+
+if [ "$(id -u)" = "0" ] || id -nG 2>/dev/null | grep -qw sudo; then
+    if command -v nft >/dev/null 2>&1; then
+        _rules=$(nft list ruleset 2>/dev/null | grep -c "chain" 2>/dev/null || echo 0)
+        if [ "$_rules" -gt 0 ]; then
+            printf '\033[0;32m  \xE2\x96\xB8 binadit-firewall: active (%s chains)\033[0m\n' "$_rules"
+        else
+            printf '\033[0;31m  \xE2\x9A\xA0 binadit-firewall: NOT ACTIVE — run: binadit-firewall start\033[0m\n'
+        fi
+    elif command -v iptables >/dev/null 2>&1; then
+        _rules=$(iptables -S 2>/dev/null | grep -cv '^\-P' 2>/dev/null || echo 0)
+        if [ "$_rules" -gt 2 ]; then
+            printf '\033[0;32m  \xE2\x96\xB8 binadit-firewall: active (%s rules)\033[0m\n' "$_rules"
+        else
+            printf '\033[0;31m  \xE2\x9A\xA0 binadit-firewall: NOT ACTIVE — run: binadit-firewall start\033[0m\n'
+        fi
+    fi
+fi
+MOTD_EOF
+
+    chmod 644 "$motd_script"
+    log_success "Login status indicator installed: ${motd_script}"
+    log_info "Admins will see firewall status on every login"
+    log_info "Remove with: ${BOLD}binadit-firewall motd-off${NC}"
+}
+
+# Remove MOTD script
+fw_remove_motd() {
+    require_root
+
+    local motd_script="/etc/profile.d/binadit-firewall-status.sh"
+    if [[ -f "$motd_script" ]]; then
+        rm -f "$motd_script"
+        log_success "Login status indicator removed"
+    else
+        log_info "Login status indicator was not installed"
+    fi
 }
 
 # Show version
@@ -394,9 +441,12 @@ fw_help() {
       ${GREEN}restart${NC}     Stop and start the firewall
       ${GREEN}reload${NC}      Reload configuration (same as start)
       ${GREEN}status${NC}      Show current firewall rules and summary
+      ${GREEN}configtest${NC}  Validate configuration without applying
       ${GREEN}setup${NC}       Interactive setup wizard
       ${GREEN}upgrade${NC}     Upgrade from v1.x or update v2.x in-place
       ${GREEN}backup${NC}      Create a backup of current rules
+      ${GREEN}motd-on${NC}     Show firewall status on every login
+      ${GREEN}motd-off${NC}    Remove login status indicator
       ${GREEN}version${NC}     Show version and system info
       ${GREEN}help${NC}        Show this help message
 
@@ -405,9 +455,11 @@ fw_help() {
 
   ${BOLD}EXAMPLES:${NC}
       binadit-firewall start          # Apply firewall rules
+      binadit-firewall configtest     # Validate config before applying
       binadit-firewall status         # View active rules and summary
       binadit-firewall setup          # Run setup wizard
       binadit-firewall upgrade        # Upgrade from older version
+      binadit-firewall motd-on        # Enable login status banner
 
 EOF
 }
@@ -433,11 +485,20 @@ case "${1:-help}" in
     status)
         fw_status
         ;;
+    configtest|test)
+        fw_configtest
+        ;;
     setup)
         fw_setup
         ;;
     upgrade)
         fw_upgrade
+        ;;
+    motd-on)
+        fw_install_motd
+        ;;
+    motd-off)
+        fw_remove_motd
         ;;
     backup)
         require_root

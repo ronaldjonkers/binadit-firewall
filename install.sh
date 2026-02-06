@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.1.0 - Installer
+# binadit-firewall v2.1.1 - Installer
 # =============================================================================
 # Universal installer for Linux systems.
 # Supports: Debian/Ubuntu, CentOS/RHEL/Rocky/Alma, Fedora, Arch, Alpine, SUSE
@@ -600,13 +600,24 @@ main() {
     ╚══════════════════════════════════════════════════════════════╝
 COMPLETE
     echo -e "${NC}"
+    # Offer MOTD login banner
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        echo ""
+        read -rp "  Show firewall status on every login (motd)? [Y/n]: " install_motd
+        if [[ "${install_motd,,}" != "n" ]]; then
+            "$SBIN_LINK" motd-on
+        fi
+    fi
+
     echo -e "  ${BOLD}Commands:${NC}"
-    echo -e "    binadit-firewall start     ${GREEN}# Apply firewall rules${NC}"
-    echo -e "    binadit-firewall stop      ${GREEN}# Disable firewall${NC}"
-    echo -e "    binadit-firewall restart   ${GREEN}# Restart firewall${NC}"
-    echo -e "    binadit-firewall status    ${GREEN}# Show active rules & summary${NC}"
-    echo -e "    binadit-firewall setup     ${GREEN}# Run setup wizard${NC}"
-    echo -e "    binadit-firewall upgrade   ${GREEN}# Upgrade from older version${NC}"
+    echo -e "    binadit-firewall start       ${GREEN}# Apply firewall rules${NC}"
+    echo -e "    binadit-firewall stop        ${GREEN}# Disable firewall${NC}"
+    echo -e "    binadit-firewall restart     ${GREEN}# Restart firewall${NC}"
+    echo -e "    binadit-firewall status      ${GREEN}# Show active rules & summary${NC}"
+    echo -e "    binadit-firewall configtest  ${GREEN}# Validate config without applying${NC}"
+    echo -e "    binadit-firewall setup       ${GREEN}# Run setup wizard${NC}"
+    echo -e "    binadit-firewall upgrade     ${GREEN}# Upgrade from older version${NC}"
+    echo -e "    binadit-firewall motd-on     ${GREEN}# Show status on login${NC}"
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
     echo -e "    ${CONFIG_DIR}/firewall.conf"

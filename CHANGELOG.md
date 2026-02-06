@@ -5,6 +5,19 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-02-06
+
+### Added
+- **configtest command**: `binadit-firewall configtest` validates every config variable with clear, actionable feedback — checks ports, IPs, booleans, numeric values, PORT_IP_RULES, PORT_FORWARD_RULES, NAT dependencies, and SSH access safety
+- **Config validation on start/reload**: configtest runs automatically before applying rules — if config has errors, firewall stays unchanged (prevents accidental lockout)
+- **Login status indicator**: `binadit-firewall motd-on` installs a subtle one-line status in `/etc/profile.d/` so admins see firewall status on every SSH login; `motd-off` removes it
+- **Installer MOTD offer**: installer now offers to enable the login status indicator during setup
+
+### Changed
+- `validate_config` now runs full configtest instead of basic syntax check
+- Installer completion screen shows `configtest` and `motd-on` commands
+- Test suite expanded to 148 tests (added configtest validation tests)
+
 ## [2.1.0] - 2026-02-06
 
 ### Added

@@ -5,7 +5,7 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)]()
+[![Version](https://img.shields.io/badge/version-2.1.1-green.svg)]()
 
 ## Features
 
@@ -23,6 +23,8 @@ Manage your server's firewall through a single, clean configuration file. No com
 - **Connection limits** — Per-IP connection limits and rate limiting
 - **Common attack blocking** — Auto-block telnet, netbios, and other attack vectors
 - **Custom rules** — Load additional raw rules from a file
+- **Config validation** — `configtest` validates every setting before applying (prevents lockout)
+- **Login status** — Optional one-line firewall status on every SSH login
 - **Auto-backup** — Rules backed up before every change
 - **Setup wizard** — Interactive setup for common configurations
 - **Seamless upgrade** — Upgrade from v1.x or older v2.x without config loss
@@ -82,9 +84,12 @@ binadit-firewall stop        # Remove all rules (shows warning banner)
 binadit-firewall restart     # Stop and start
 binadit-firewall reload      # Reload configuration
 binadit-firewall status      # Show rule summary + active rules
+binadit-firewall configtest  # Validate config without applying
 binadit-firewall setup       # Interactive setup wizard
 binadit-firewall upgrade     # Upgrade from v1.x or update v2.x in-place
 binadit-firewall backup      # Create manual backup
+binadit-firewall motd-on     # Show firewall status on every login
+binadit-firewall motd-off    # Remove login status indicator
 binadit-firewall version     # Show version and system info
 ```
 
@@ -203,7 +208,7 @@ binadit-firewall/
 │       ├── backend_nftables.sh         # nftables implementation
 │       └── backend_iptables.sh         # iptables implementation
 ├── tests/
-│   └── test_firewall.sh               # Test suite (138+ tests)
+│   └── test_firewall.sh               # Test suite (148+ tests)
 ├── CHANGELOG.md
 ├── LICENSE                             # GPL-2.0
 └── README.md
@@ -223,6 +228,7 @@ Tests cover:
 - Install script coverage (including OpenRC, upgrade detection)
 - Backend function availability
 - UI functions (banners, rule summary)
+- configtest validation (valid config, bad syntax, invalid ports, invalid booleans)
 - Security features (SYN flood, conn limits, port forwarding)
 - Version consistency
 - Logging functions
