@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.0.0
+# binadit-firewall v2.1.0
 # =============================================================================
 # A modern, easy-to-use Linux firewall manager with support for both
 # nftables and iptables backends.
@@ -8,7 +8,7 @@
 # Copyright (C) 2013-2026 Ronald Jonkers - binadit
 # License: GPL-2.0
 #
-# Usage: binadit-firewall {start|stop|restart|status|reload|backup|version}
+# Usage: binadit-firewall {start|stop|restart|status|reload|backup|upgrade|version}
 # =============================================================================
 
 set -euo pipefail
@@ -67,7 +67,7 @@ fw_start() {
     require_root
     validate_config
 
-    log_header "Starting binadit-firewall v${BINADIT_VERSION}"
+    show_banner
 
     local backend
     backend=$(get_backend)
@@ -89,7 +89,8 @@ fw_start() {
             ;;
     esac
 
-    log_success "binadit-firewall is active"
+    print_rule_summary "$CONFIG_FILE"
+    show_protected
 }
 
 # Stop the firewall (flush all rules, allow all traffic)
@@ -113,13 +114,21 @@ fw_stop() {
             ;;
     esac
 
-    log_success "binadit-firewall stopped - all traffic allowed"
+    show_unprotected
 }
 
 # Show firewall status
 fw_status() {
+    show_banner
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        print_rule_summary "$CONFIG_FILE"
+    fi
+
     local backend
     backend=$(detect_backend)
+
+    log_header "Active Rules ($(echo "$backend" | tr '[:lower:]' '[:upper:]'))"
 
     case "$backend" in
         nftables)
@@ -139,10 +148,133 @@ fw_reload() {
 
 # Show version
 fw_version() {
-    echo -e "${BOLD}binadit-firewall${NC} v${BINADIT_VERSION}"
-    echo "Backend: $(detect_backend)"
-    echo "Config:  ${CONFIG_FILE}"
-    echo "OS:      $(detect_distro) ($(detect_distro_family))"
+    show_banner
+    echo -e "  ${BOLD}Backend:${NC}  $(detect_backend)"
+    echo -e "  ${BOLD}Config:${NC}   ${CONFIG_FILE}"
+    echo -e "  ${BOLD}OS:${NC}       $(detect_distro) ($(detect_distro_family))"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        echo -e "  ${BOLD}Status:${NC}   ${GREEN}configured${NC}"
+    else
+        echo -e "  ${BOLD}Status:${NC}   ${YELLOW}not configured${NC}"
+    fi
+    echo ""
+}
+
+# Upgrade from v1.x or older v2.x (preserves config)
+fw_upgrade() {
+    require_root
+
+    show_banner
+    log_header "Upgrade Check"
+
+    local needs_upgrade=false
+    local old_v1_config="/etc/firewall.d/host.conf"
+    local old_v1_script="/etc/init.d/firewall"
+
+    # Check for v1.x installation
+    if [[ -f "$old_v1_config" ]] || [[ -f "$old_v1_script" ]]; then
+        log_warn "Found binadit-firewall v1.x installation"
+        needs_upgrade=true
+
+        echo ""
+        echo -e "  ${BOLD}Migration plan:${NC}"
+        echo -e "  ${CYAN}│${NC} 1. Migrate config from ${old_v1_config}"
+        echo -e "  ${CYAN}│${NC} 2. Preserve all port/IP settings"
+        echo -e "  ${CYAN}│${NC} 3. Install new v${BINADIT_VERSION} files"
+        echo -e "  ${CYAN}│${NC} 4. Setup systemd/init.d service"
+        echo -e "  ${CYAN}│${NC} 5. Backup and remove old files"
+        echo ""
+
+        read -rp "  Proceed with upgrade? [Y/n]: " do_upgrade
+        if [[ "${do_upgrade,,}" == "n" ]]; then
+            log_info "Upgrade cancelled"
+            return 0
+        fi
+
+        # Migrate the config
+        if [[ -f "$old_v1_config" ]]; then
+            log_info "Migrating v1.x configuration..."
+            mkdir -p "$CONFIG_DIR"
+
+            # Source old config
+            # shellcheck source=/dev/null
+            source "$old_v1_config"
+
+            # Create new config from example
+            local example="${SCRIPT_DIR}/../config/firewall.conf.example"
+            [[ ! -f "$example" ]] && example="${CONFIG_DIR}/firewall.conf.example"
+            cp "$example" "${CONFIG_DIR}/firewall.conf"
+            local new_conf="${CONFIG_DIR}/firewall.conf"
+
+            # Map old variables to new
+            [[ -n "${TCPPORTS:-}" ]] && sed -i "s/^TCP_PORTS=.*/TCP_PORTS=\"${TCPPORTS}\"/" "$new_conf"
+            [[ -n "${TCPPORTS_INPUT:-}" ]] && sed -i "s/^TCP_PORTS_INPUT=.*/TCP_PORTS_INPUT=\"${TCPPORTS_INPUT}\"/" "$new_conf"
+            [[ -n "${TCPPORTS_OUTPUT:-}" ]] && sed -i "s/^TCP_PORTS_OUTPUT=.*/TCP_PORTS_OUTPUT=\"${TCPPORTS_OUTPUT}\"/" "$new_conf"
+            [[ -n "${UDPPORTS:-}" ]] && sed -i "s/^UDP_PORTS=.*/UDP_PORTS=\"${UDPPORTS}\"/" "$new_conf"
+            [[ -n "${DMZS:-}" ]] && sed -i "s/^TRUSTED_IPS=.*/TRUSTED_IPS=\"${DMZS}\"/" "$new_conf"
+            [[ -n "${SSHACCESS:-}" ]] && sed -i "s/^SSH_ALLOWED_IPS=.*/SSH_ALLOWED_IPS=\"${SSHACCESS}\"/" "$new_conf"
+            [[ -n "${SSHACCESS_IPv6:-}" ]] && sed -i "s/^SSH_ALLOWED_IPS_IPV6=.*/SSH_ALLOWED_IPS_IPV6=\"${SSHACCESS_IPv6}\"/" "$new_conf"
+            [[ -n "${DMZRANGE:-}" ]] && sed -i "s/^TRUSTED_RANGES=.*/TRUSTED_RANGES=\"${DMZRANGE}\"/" "$new_conf"
+            [[ -n "${BLACKLIST:-}" ]] && sed -i "s/^BLACKLIST=.*/BLACKLIST=\"${BLACKLIST}\"/" "$new_conf"
+            [[ -n "${BLOCKRANGE:-}" ]] && sed -i "s/^BLOCKED_RANGES=.*/BLOCKED_RANGES=\"${BLOCKRANGE}\"/" "$new_conf"
+            [[ -n "${DMZS_IPv6:-}" ]] && sed -i "s/^TRUSTED_IPS_IPV6=.*/TRUSTED_IPS_IPV6=\"${DMZS_IPv6}\"/" "$new_conf"
+            [[ -n "${BLACKLIST_IPv6:-}" ]] && sed -i "s/^BLACKLIST_IPV6=.*/BLACKLIST_IPV6=\"${BLACKLIST_IPv6}\"/" "$new_conf"
+            [[ "${MULTICAST_ENABLE:-}" == "TRUE" ]] && sed -i 's/^MULTICAST_ENABLE=.*/MULTICAST_ENABLE="true"/' "$new_conf"
+            [[ "${NATROUTER_ENABLE:-}" == "TRUE" ]] && sed -i 's/^NAT_ENABLE=.*/NAT_ENABLE="true"/' "$new_conf"
+
+            # Backup old files
+            mv "$old_v1_config" "${old_v1_config}.migrated.$(date +%Y%m%d)"
+            log_success "Config migrated: ${old_v1_config} -> ${new_conf}"
+        fi
+
+        # Remove old init.d script
+        if [[ -f "$old_v1_script" ]]; then
+            mv "$old_v1_script" "${old_v1_script}.v1.bak"
+            log_success "Old init script backed up: ${old_v1_script}.v1.bak"
+        fi
+    fi
+
+    # Check for existing v2.x that needs file update
+    if [[ -f "/usr/local/share/binadit-firewall/binadit-firewall.sh" ]]; then
+        local installed_version
+        installed_version=$(grep "BINADIT_VERSION=" /usr/local/share/binadit-firewall/lib/common.sh 2>/dev/null | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/' || echo "unknown")
+
+        if [[ "$installed_version" != "$BINADIT_VERSION" ]]; then
+            log_info "Installed version: ${BOLD}${installed_version}${NC}"
+            log_info "Available version: ${BOLD}${BINADIT_VERSION}${NC}"
+            needs_upgrade=true
+
+            read -rp "  Upgrade to v${BINADIT_VERSION}? (config will be preserved) [Y/n]: " do_upgrade
+            if [[ "${do_upgrade,,}" == "n" ]]; then
+                log_info "Upgrade cancelled"
+                return 0
+            fi
+
+            # Update program files only (preserve config)
+            log_info "Updating program files..."
+            cp -r "${SCRIPT_DIR}/"* /usr/local/share/binadit-firewall/
+            cp "${SCRIPT_DIR}/../config/firewall.conf.example" "${CONFIG_DIR}/firewall.conf.example"
+            chmod 755 /usr/local/share/binadit-firewall/binadit-firewall.sh
+            chmod 644 /usr/local/share/binadit-firewall/lib/*.sh
+            log_success "Program files updated to v${BINADIT_VERSION}"
+            log_success "Configuration preserved: ${CONFIG_FILE}"
+        else
+            log_success "Already running v${BINADIT_VERSION} - no upgrade needed"
+            return 0
+        fi
+    fi
+
+    if [[ "$needs_upgrade" == "false" ]]; then
+        log_success "No previous installation found. Run 'install.sh' for fresh install."
+        return 0
+    fi
+
+    # Restart with new version
+    echo ""
+    read -rp "  Restart firewall with new version? [Y/n]: " do_restart
+    if [[ "${do_restart,,}" != "n" ]]; then
+        fw_start
+    fi
 }
 
 # Interactive setup wizard
@@ -251,31 +383,31 @@ fw_setup() {
 
 # Show help
 fw_help() {
+    show_banner
     cat <<EOF
+  ${BOLD}USAGE:${NC}
+      binadit-firewall <command>
 
-${BOLD}binadit-firewall${NC} v${BINADIT_VERSION} - Simple Linux Firewall Manager
+  ${BOLD}COMMANDS:${NC}
+      ${GREEN}start${NC}       Apply firewall rules from configuration
+      ${GREEN}stop${NC}        Remove all rules (allow all traffic)
+      ${GREEN}restart${NC}     Stop and start the firewall
+      ${GREEN}reload${NC}      Reload configuration (same as start)
+      ${GREEN}status${NC}      Show current firewall rules and summary
+      ${GREEN}setup${NC}       Interactive setup wizard
+      ${GREEN}upgrade${NC}     Upgrade from v1.x or update v2.x in-place
+      ${GREEN}backup${NC}      Create a backup of current rules
+      ${GREEN}version${NC}     Show version and system info
+      ${GREEN}help${NC}        Show this help message
 
-${BOLD}USAGE:${NC}
-    binadit-firewall <command>
+  ${BOLD}CONFIGURATION:${NC}
+      ${CONFIG_FILE}
 
-${BOLD}COMMANDS:${NC}
-    ${GREEN}start${NC}       Apply firewall rules from configuration
-    ${GREEN}stop${NC}        Remove all rules (allow all traffic)
-    ${GREEN}restart${NC}     Stop and start the firewall
-    ${GREEN}reload${NC}      Reload configuration (same as start)
-    ${GREEN}status${NC}      Show current firewall rules
-    ${GREEN}setup${NC}       Interactive setup wizard
-    ${GREEN}backup${NC}      Create a backup of current rules
-    ${GREEN}version${NC}     Show version and system info
-    ${GREEN}help${NC}        Show this help message
-
-${BOLD}CONFIGURATION:${NC}
-    ${CONFIG_FILE}
-
-${BOLD}EXAMPLES:${NC}
-    binadit-firewall start          # Apply firewall rules
-    binadit-firewall status         # View active rules
-    binadit-firewall setup          # Run setup wizard
+  ${BOLD}EXAMPLES:${NC}
+      binadit-firewall start          # Apply firewall rules
+      binadit-firewall status         # View active rules and summary
+      binadit-firewall setup          # Run setup wizard
+      binadit-firewall upgrade        # Upgrade from older version
 
 EOF
 }
@@ -303,6 +435,9 @@ case "${1:-help}" in
         ;;
     setup)
         fw_setup
+        ;;
+    upgrade)
+        fw_upgrade
         ;;
     backup)
         require_root

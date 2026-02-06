@@ -237,6 +237,26 @@ nft_apply() {
         ruleset+="        ip6 daddr ff00::/8 accept\n"
     fi
 
+    # SYN flood protection
+    if [[ "${SYN_FLOOD_PROTECT:-true}" == "true" ]]; then
+        ruleset+="\n        # SYN flood protection\n"
+        ruleset+="        tcp flags syn limit rate 1/second burst 3 accept\n"
+    fi
+
+    # Connection limit per IP
+    if [[ "${CONN_LIMIT_ENABLE:-false}" == "true" ]]; then
+        local conn_limit="${CONN_LIMIT_PER_IP:-50}"
+        ruleset+="\n        # Connection limit per IP\n"
+        ruleset+="        ct state new tcp flags syn ct count over ${conn_limit} drop\n"
+    fi
+
+    # Block common attack ports
+    if [[ "${BLOCK_COMMON_ATTACKS:-true}" == "true" ]]; then
+        ruleset+="\n        # Block common attack ports\n"
+        ruleset+="        tcp dport { 23, 135, 137-139, 445, 1900 } drop\n"
+        ruleset+="        udp dport { 23, 135, 137-139, 445, 1900 } drop\n"
+    fi
+
     # Rate limiting (DDoS protection)
     if [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]]; then
         local rate="${RATE_LIMIT_RATE:-25/second}"
@@ -366,6 +386,28 @@ nft_apply() {
     # --- NAT table ---
     if [[ "${NAT_ENABLE:-false}" == "true" ]]; then
         local ext_iface="${NAT_EXTERNAL_IFACE:-eth0}"
+
+        # Port forwarding (DNAT)
+        if [[ -n "${PORT_FORWARD_RULES:-}" ]]; then
+            ruleset+="\n    chain prerouting {\n"
+            ruleset+="        type nat hook prerouting priority -100;\n"
+            local IFS_OLD="$IFS"
+            IFS=$'\n'
+            for rule in $PORT_FORWARD_RULES; do
+                IFS="$IFS_OLD"
+                local proto ext_port int_dest
+                proto=$(echo "$rule" | awk -F'|' '{print $1}' | xargs)
+                ext_port=$(echo "$rule" | awk -F'|' '{print $2}' | xargs)
+                int_dest=$(echo "$rule" | awk -F'|' '{print $3}' | xargs)
+                if [[ -n "$proto" && -n "$ext_port" && -n "$int_dest" ]]; then
+                    ruleset+="        ${proto} dport ${ext_port} dnat to ${int_dest}\n"
+                fi
+                IFS=$'\n'
+            done
+            IFS="$IFS_OLD"
+            ruleset+="    }\n"
+        fi
+
         ruleset+="\n    chain postrouting {\n"
         ruleset+="        type nat hook postrouting priority 100;\n"
         ruleset+="        oif ${ext_iface} masquerade\n"

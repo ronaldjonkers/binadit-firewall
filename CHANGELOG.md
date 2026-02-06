@@ -5,6 +5,37 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-02-06
+
+### Added
+- **ASCII art banners**: Beautiful colored output for start, stop, and status commands
+- **Rule summary**: Clear overview of active rules displayed on start and status
+- **Protection banner**: "YOUR SERVER IS NOW PROTECTED" ASCII art on firewall start
+- **Warning banner**: "FIREWALL DISABLED - SERVER EXPOSED" on firewall stop
+- **SYN flood protection**: `SYN_FLOOD_PROTECT` option (enabled by default)
+- **Connection limit per IP**: `CONN_LIMIT_ENABLE` / `CONN_LIMIT_PER_IP` to prevent resource hogging
+- **Connection rate limiting per IP**: `CONN_RATE_PER_IP` for per-source rate control
+- **Common attack port blocking**: `BLOCK_COMMON_ATTACKS` blocks telnet, netbios, etc.
+- **Port forwarding (DNAT)**: `PORT_FORWARD_RULES` for NAT port forwarding
+- **Custom rules file**: `CUSTOM_RULES_FILE` for advanced users to add raw rules
+- **Drop invalid packets**: `DROP_INVALID` option (enabled by default)
+- **Upgrade command**: `binadit-firewall upgrade` for seamless v1.x → v2.x migration
+- **In-place upgrade**: Installer detects existing v2.x and upgrades without config loss
+- **OpenRC support**: Native OpenRC service for Alpine Linux and Gentoo
+- **SysVinit support**: Improved init.d script for legacy systems
+
+### Changed
+- Beautified all terminal output with Unicode box-drawing characters and color coding
+- Logging functions use Unicode symbols (▸, ✓, ✗, ⚠) for better readability
+- Status command now shows rule summary alongside raw rules
+- Version command shows configuration status
+- Help command displays ASCII art banner
+- Installer shows completion banner with service management commands
+- Test suite expanded from 108 to 138+ tests
+
+### Removed
+- Legacy `etc/` folder with old v1.x scripts (no longer needed in repository)
+
 ## [2.0.0] - 2026-02-06
 
 ### Added

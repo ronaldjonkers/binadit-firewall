@@ -11,7 +11,7 @@ set -euo pipefail
 # Guard against re-sourcing (readonly can only be set once)
 if [[ -z "${_BINADIT_COMMON_LOADED:-}" ]]; then
     readonly _BINADIT_COMMON_LOADED=1
-    readonly BINADIT_VERSION="2.0.0"
+    readonly BINADIT_VERSION="2.1.0"
     readonly RED='\033[0;31m'
     readonly GREEN='\033[0;32m'
     readonly YELLOW='\033[1;33m'
@@ -22,15 +22,160 @@ if [[ -z "${_BINADIT_COMMON_LOADED:-}" ]]; then
 fi
 
 # Logging functions
-log_info()    { echo -e "${GREEN}[INFO]${NC}    $*"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC}    $*" >&2; }
-log_error()   { echo -e "${RED}[ERROR]${NC}   $*" >&2; }
-log_success() { echo -e "${GREEN}[OK]${NC}      $*"; }
-log_header()  { echo -e "\n${BOLD}${CYAN}=== $* ===${NC}\n"; }
+log_info()    { echo -e "  ${GREEN}▸${NC} $*"; }
+log_warn()    { echo -e "  ${YELLOW}⚠${NC} $*" >&2; }
+log_error()   { echo -e "  ${RED}✗${NC} $*" >&2; }
+log_success() { echo -e "  ${GREEN}✓${NC} $*"; }
+log_header()  { echo -e "\n  ${BOLD}${CYAN}━━━ $* ━━━${NC}\n"; }
+log_rule()    { echo -e "  ${BLUE}│${NC} $*"; }
 log_debug()   {
     if [[ "${BINADIT_DEBUG:-false}" == "true" ]]; then
-        echo -e "${BLUE}[DEBUG]${NC}   $*" >&2
+        echo -e "  ${BLUE}⊡${NC} $*" >&2
     fi
+}
+
+# Show the binadit-firewall ASCII art banner
+show_banner() {
+    echo -e "${CYAN}"
+    cat <<'BANNER'
+    ╔══════════════════════════════════════════════════════════════╗
+    ║   _     _                 _ _ _        __ _                ║
+    ║  | |__ (_)_ __   __ _  __| (_) |_     / _(_)_ __ ___      ║
+    ║  | '_ \| | '_ \ / _` |/ _` | | __|___| |_| | '__/ _ \     ║
+    ║  | |_) | | | | | (_| | (_| | | ||_____|  _| | | |  __/     ║
+    ║  |_.__/|_|_| |_|\__,_|\__,_|_|\__|    |_| |_|_|  \___|     ║
+    ║                                                            ║
+BANNER
+    echo -e "    ║          ${BOLD}Simple Linux Firewall Manager${NC}${CYAN}             ║"
+    echo -e "    ║                  v${BINADIT_VERSION}                              ║"
+    echo    "    ╚══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# Show protection active banner
+show_protected() {
+    echo ""
+    echo -e "${GREEN}${BOLD}"
+    cat <<'BANNER'
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                                                            ║
+    ║        🛡️  YOUR SERVER IS NOW PROTECTED  🛡️                ║
+    ║                                                            ║
+    ║    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   ║
+    ║    ░  binadit-firewall is actively filtering traffic    ░   ║
+    ║    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   ║
+    ║                                                            ║
+    ╚══════════════════════════════════════════════════════════════╝
+BANNER
+    echo -e "${NC}"
+}
+
+# Show firewall stopped banner
+show_unprotected() {
+    echo ""
+    echo -e "${RED}${BOLD}"
+    cat <<'BANNER'
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                                                            ║
+    ║        ⚠️   FIREWALL DISABLED - SERVER EXPOSED  ⚠️          ║
+    ║                                                            ║
+    ║    All traffic is currently allowed. Run:                   ║
+    ║      binadit-firewall start                                ║
+    ║    to re-enable protection.                                ║
+    ║                                                            ║
+    ╚══════════════════════════════════════════════════════════════╝
+BANNER
+    echo -e "${NC}"
+}
+
+# Print a summary of the applied rules
+print_rule_summary() {
+    local config_file="$1"
+    # shellcheck source=/dev/null
+    source "$config_file"
+
+    local ssh_port
+    ssh_port=$(detect_ssh_port)
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─────────────────────────────────────────────────────┐${NC}"
+    echo -e "  ${BOLD}${CYAN}│${NC}  ${BOLD}Firewall Rule Summary${NC}                               ${BOLD}${CYAN}│${NC}"
+    echo -e "  ${BOLD}${CYAN}├─────────────────────────────────────────────────────┤${NC}"
+
+    # TCP Ports
+    if [[ -n "${TCP_PORTS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${GREEN}TCP open:${NC}        $TCP_PORTS"
+    fi
+    if [[ -n "${TCP_PORTS_INPUT:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${GREEN}TCP in-only:${NC}     $TCP_PORTS_INPUT"
+    fi
+    if [[ -n "${TCP_PORTS_OUTPUT:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${GREEN}TCP out-only:${NC}    $TCP_PORTS_OUTPUT"
+    fi
+    if [[ -n "${UDP_PORTS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${GREEN}UDP open:${NC}        $UDP_PORTS"
+    fi
+
+    # Blocked
+    if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}TCP blocked:${NC}     $BLOCKED_TCP_PORTS"
+    fi
+    if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}UDP blocked:${NC}     $BLOCKED_UDP_PORTS"
+    fi
+
+    echo -e "  ${CYAN}├─────────────────────────────────────────────────────┤${NC}"
+
+    # SSH
+    if [[ -n "${SSH_ALLOWED_IPS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${YELLOW}SSH (${ssh_port}):${NC}       restricted to: ${SSH_ALLOWED_IPS}"
+    else
+        echo -e "  ${CYAN}│${NC}  ${YELLOW}SSH (${ssh_port}):${NC}       open (via TCP_PORTS or unrestricted)"
+    fi
+
+    # Trusted
+    if [[ -n "${TRUSTED_IPS:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${GREEN}Trusted IPs:${NC}     $TRUSTED_IPS"
+    fi
+    if [[ -n "${TRUSTED_RANGES:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${GREEN}Trusted ranges:${NC}  $TRUSTED_RANGES"
+    fi
+
+    # Blacklist
+    if [[ -n "${BLACKLIST:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}Blacklisted:${NC}     $BLACKLIST"
+    fi
+    if [[ -n "${BLOCKED_RANGES:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}Blocked ranges:${NC}  $BLOCKED_RANGES"
+    fi
+
+    # Port-IP rules
+    if [[ -n "${PORT_IP_RULES:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${BLUE}Port-IP rules:${NC}   (custom rules active)"
+    fi
+
+    # Port forwarding
+    if [[ -n "${PORT_FORWARD_RULES:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${BLUE}Port forwards:${NC}   (active)"
+    fi
+
+    echo -e "  ${CYAN}├─────────────────────────────────────────────────────┤${NC}"
+
+    # Features
+    local features=""
+    [[ "${ICMP_ENABLE:-true}" == "true" ]] && features+="${GREEN}ping${NC} "
+    [[ "${ICMP_ENABLE:-true}" != "true" ]] && features+="${RED}no-ping${NC} "
+    [[ "${MULTICAST_ENABLE:-false}" == "true" ]] && features+="${GREEN}multicast${NC} "
+    [[ "${SMTP_ENABLE:-true}" == "true" ]] && features+="${GREEN}smtp${NC} "
+    [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]] && features+="${GREEN}rate-limit${NC} "
+    [[ "${LOG_DROPPED:-true}" == "true" ]] && features+="${GREEN}logging${NC} "
+    [[ "${NAT_ENABLE:-false}" == "true" ]] && features+="${GREEN}nat${NC} "
+    [[ "${SYN_FLOOD_PROTECT:-true}" == "true" ]] && features+="${GREEN}syn-protect${NC} "
+    [[ "${CONN_LIMIT_ENABLE:-false}" == "true" ]] && features+="${GREEN}conn-limit${NC} "
+    echo -e "  ${CYAN}│${NC}  ${BOLD}Features:${NC}        $features"
+
+    echo -e "  ${CYAN}└─────────────────────────────────────────────────────┘${NC}"
+    echo ""
 }
 
 # Check if running as root

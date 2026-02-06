@@ -1,5 +1,5 @@
 # =============================================================================
-# binadit-firewall v2.0.0 - Configuration File
+# binadit-firewall v2.1.0 - Configuration File
 # =============================================================================
 # Location: /etc/binadit-firewall/firewall.conf
 #
@@ -135,6 +135,48 @@ NAT_EXTERNAL_IFACE="eth0"
 
 # Internal network interface (LAN-facing)
 NAT_INTERNAL_IFACE="eth1"
+
+# -----------------------------------------------------------------------------
+# SECURITY HARDENING
+# -----------------------------------------------------------------------------
+# SYN flood protection (recommended)
+SYN_FLOOD_PROTECT="true"
+
+# Limit concurrent connections per source IP (0 = disabled)
+# Useful to prevent a single IP from hogging resources
+CONN_LIMIT_ENABLE="false"
+CONN_LIMIT_PER_IP="50"
+
+# Limit new connections per second per source IP (0 = disabled)
+CONN_RATE_PER_IP="15"
+
+# Drop invalid packets (recommended)
+DROP_INVALID="true"
+
+# Block common attack ports (telnet, netbios, etc.)
+# Adds: 23, 135, 137-139, 445, 1900
+BLOCK_COMMON_ATTACKS="true"
+
+# -----------------------------------------------------------------------------
+# PORT FORWARDING (DNAT)
+# -----------------------------------------------------------------------------
+# Forward external ports to internal IPs (requires NAT_ENABLE=true)
+# Format: one rule per line, fields separated by pipe (|)
+#   protocol | external_port | internal_ip:internal_port
+#
+# Example:
+# PORT_FORWARD_RULES="tcp|8080|192.168.1.100:80
+# tcp|2222|192.168.1.100:22
+# udp|51820|192.168.1.200:51820"
+PORT_FORWARD_RULES=""
+
+# -----------------------------------------------------------------------------
+# CUSTOM RULES
+# -----------------------------------------------------------------------------
+# Path to a file with additional raw rules (iptables or nft syntax)
+# These are appended after all other rules. Leave empty to disable.
+# Example: CUSTOM_RULES_FILE="/etc/binadit-firewall/custom.rules"
+CUSTOM_RULES_FILE=""
 
 # -----------------------------------------------------------------------------
 # ADVANCED

@@ -264,6 +264,16 @@ test_config_file() {
     assert_contains "Config has TRUSTED_RANGES"     "$config" "^TRUSTED_RANGES="
     assert_contains "Config has BLOCKED_RANGES"     "$config" "^BLOCKED_RANGES="
 
+    # v2.1.0 new features
+    assert_contains "Config has SYN_FLOOD_PROTECT"    "$config" "^SYN_FLOOD_PROTECT="
+    assert_contains "Config has CONN_LIMIT_ENABLE"    "$config" "^CONN_LIMIT_ENABLE="
+    assert_contains "Config has CONN_LIMIT_PER_IP"    "$config" "^CONN_LIMIT_PER_IP="
+    assert_contains "Config has CONN_RATE_PER_IP"     "$config" "^CONN_RATE_PER_IP="
+    assert_contains "Config has DROP_INVALID"          "$config" "^DROP_INVALID="
+    assert_contains "Config has BLOCK_COMMON_ATTACKS" "$config" "^BLOCK_COMMON_ATTACKS="
+    assert_contains "Config has PORT_FORWARD_RULES"   "$config" "^PORT_FORWARD_RULES="
+    assert_contains "Config has CUSTOM_RULES_FILE"    "$config" "^CUSTOM_RULES_FILE="
+
     # Verify config is valid bash
     TESTS_RUN=$((TESTS_RUN + 1))
     if bash -n "$config" 2>/dev/null; then
@@ -313,6 +323,11 @@ test_install_script() {
     assert_contains "Installer supports apk"           "$installer" "apk"
     assert_contains "Installer supports zypper"        "$installer" "zypper"
     assert_contains "Installer migrates old config"    "$installer" "migrate_old_config"
+
+    # v2.1.0 new installer features
+    assert_contains "Installer detects existing install" "$installer" "detect_existing_install"
+    assert_contains "Installer supports OpenRC"          "$installer" "rc-service"
+    assert_contains "Installer supports upgrade"         "$installer" "Upgrade"
 }
 
 # =============================================================================
@@ -370,6 +385,121 @@ test_backend_functions() {
 }
 
 # =============================================================================
+# Test: UI functions (v2.1.0)
+# =============================================================================
+
+test_ui_functions() {
+    echo -e "\n${BOLD}Test: UI Functions${NC}"
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if declare -f show_banner &>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} show_banner function exists"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} show_banner function not found"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if declare -f show_protected &>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} show_protected function exists"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} show_protected function not found"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if declare -f show_unprotected &>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} show_unprotected function exists"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} show_unprotected function not found"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if declare -f print_rule_summary &>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} print_rule_summary function exists"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} print_rule_summary function not found"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if declare -f log_rule &>/dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} log_rule function exists"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} log_rule function not found"
+    fi
+
+    # Test show_banner output contains expected text
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local banner_output
+    banner_output=$(show_banner 2>&1)
+    if [[ "$banner_output" == *"Firewall Manager"* ]]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} show_banner contains 'Firewall Manager'"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} show_banner output missing 'Firewall Manager'"
+    fi
+
+    # Test show_protected output
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local prot_output
+    prot_output=$(show_protected 2>&1)
+    if [[ "$prot_output" == *"PROTECTED"* ]]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} show_protected contains 'PROTECTED'"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} show_protected output missing 'PROTECTED'"
+    fi
+
+    # Test show_unprotected output
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local unprot_output
+    unprot_output=$(show_unprotected 2>&1)
+    if [[ "$unprot_output" == *"DISABLED"* ]]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "  ${GREEN}✓${NC} show_unprotected contains 'DISABLED'"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "  ${RED}✗${NC} show_unprotected output missing 'DISABLED'"
+    fi
+}
+
+# =============================================================================
+# Test: New security features in backends (v2.1.0)
+# =============================================================================
+
+test_security_features() {
+    echo -e "\n${BOLD}Test: Security Features (v2.1.0)${NC}"
+
+    local nft_backend="${LIB_DIR}/backend_nftables.sh"
+    local ipt_backend="${LIB_DIR}/backend_iptables.sh"
+
+    assert_contains "nftables: SYN flood protection"      "$nft_backend" "SYN flood"
+    assert_contains "nftables: connection limit"           "$nft_backend" "CONN_LIMIT"
+    assert_contains "nftables: common attack ports"        "$nft_backend" "BLOCK_COMMON_ATTACKS"
+    assert_contains "nftables: port forwarding"            "$nft_backend" "PORT_FORWARD_RULES"
+
+    assert_contains "iptables: SYN flood protection"      "$ipt_backend" "SYN_FLOOD"
+    assert_contains "iptables: connection limit"           "$ipt_backend" "CONN_LIMIT"
+    assert_contains "iptables: connection rate limit"      "$ipt_backend" "CONN_RATE_PER_IP"
+    assert_contains "iptables: common attack ports"        "$ipt_backend" "BLOCK_COMMON_ATTACKS"
+    assert_contains "iptables: port forwarding"            "$ipt_backend" "PORT_FORWARD_RULES"
+    assert_contains "iptables: custom rules"               "$ipt_backend" "CUSTOM_RULES_FILE"
+
+    # Main script has upgrade command
+    assert_contains "Main script: upgrade command"         "${SRC_DIR}/binadit-firewall.sh" "fw_upgrade"
+}
+
+# =============================================================================
 # Test: Version consistency
 # =============================================================================
 
@@ -381,7 +511,7 @@ test_version_consistency() {
     version_common=$(grep "BINADIT_VERSION=" "${LIB_DIR}/common.sh" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
     version_main=$(grep "binadit-firewall v" "${SRC_DIR}/binadit-firewall.sh" | head -1 | sed 's/.*v\([0-9.]*\).*/\1/' || echo "")
 
-    assert_equals "Version in common.sh" "2.0.0" "$version_common"
+    assert_equals "Version in common.sh" "2.1.0" "$version_common"
 
     # Check CHANGELOG has the version
     if [[ -f "${PROJECT_DIR}/CHANGELOG.md" ]]; then
@@ -524,6 +654,8 @@ main() {
     test_systemd_service
     test_install_script
     test_backend_functions
+    test_ui_functions
+    test_security_features
     test_version_consistency
     test_logging_functions
     test_resolve_passthrough

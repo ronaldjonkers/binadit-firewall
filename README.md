@@ -5,21 +5,28 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-2.0.0-green.svg)]()
+[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)]()
 
 ## Features
 
 - **Dual backend** — Automatically uses nftables or iptables (whatever is available)
 - **One config file** — All rules in `/etc/binadit-firewall/firewall.conf`
+- **Beautiful output** — ASCII art banners, colored rule summaries, clear status indicators
 - **IPv4 + IPv6** — Full dual-stack support
 - **Port blocking** — Block specific ports explicitly
 - **IP-per-port rules** — Allow specific IPs for specific ports (e.g., MySQL only from `10.0.0.5`)
+- **Port forwarding** — DNAT rules for forwarding external ports to internal IPs
 - **IP ranges** — CIDR and dash-notation support for trusted/blocked ranges
 - **SSH protection** — Restrict SSH to specific IPs
-- **Rate limiting** — Built-in DDoS protection
+- **SYN flood protection** — Built-in SYN flood mitigation
+- **Rate limiting** — DDoS protection with configurable rate/burst
+- **Connection limits** — Per-IP connection limits and rate limiting
+- **Common attack blocking** — Auto-block telnet, netbios, and other attack vectors
+- **Custom rules** — Load additional raw rules from a file
 - **Auto-backup** — Rules backed up before every change
 - **Setup wizard** — Interactive setup for common configurations
-- **Boot persistence** — Systemd service (with init.d fallback)
+- **Seamless upgrade** — Upgrade from v1.x or older v2.x without config loss
+- **Boot persistence** — Systemd, OpenRC (Alpine/Gentoo), and SysVinit support
 - **Migration** — Automatic migration from v1.x configs
 - **Multi-distro** — Debian, Ubuntu, CentOS, RHEL, Rocky, Alma, Fedora, Arch, Alpine, SUSE
 
@@ -70,12 +77,13 @@ sudo bash install.sh --uninstall
 ## Usage
 
 ```bash
-binadit-firewall start       # Apply firewall rules
-binadit-firewall stop        # Remove all rules (allow all traffic)
+binadit-firewall start       # Apply firewall rules (shows protection banner)
+binadit-firewall stop        # Remove all rules (shows warning banner)
 binadit-firewall restart     # Stop and start
 binadit-firewall reload      # Reload configuration
-binadit-firewall status      # Show current rules
+binadit-firewall status      # Show rule summary + active rules
 binadit-firewall setup       # Interactive setup wizard
+binadit-firewall upgrade     # Upgrade from v1.x or update v2.x in-place
 binadit-firewall backup      # Create manual backup
 binadit-firewall version     # Show version and system info
 ```
@@ -120,17 +128,50 @@ SMTP_ENABLE="true"           # Outgoing mail
 RATE_LIMIT_ENABLE="true"     # DDoS protection
 LOG_DROPPED="true"           # Log dropped packets
 
+# Security hardening
+SYN_FLOOD_PROTECT="true"     # SYN flood protection
+CONN_LIMIT_ENABLE="false"    # Per-IP connection limit
+CONN_LIMIT_PER_IP="50"       # Max connections per IP
+BLOCK_COMMON_ATTACKS="true"  # Block telnet, netbios, etc.
+
+# Port forwarding (requires NAT_ENABLE)
+PORT_FORWARD_RULES="tcp|8080|192.168.1.100:80
+tcp|2222|192.168.1.100:22"
+
 # NAT routing
 NAT_ENABLE="false"
 NAT_EXTERNAL_IFACE="eth0"
 NAT_INTERNAL_IFACE="eth1"
+
+# Custom rules (for advanced users)
+CUSTOM_RULES_FILE="/etc/binadit-firewall/custom.rules"
 ```
 
 See `config/firewall.conf.example` for the full configuration reference with all options documented.
 
-## Migrating from v1.x
+## Upgrading
 
-The installer automatically detects and migrates old configurations from `/etc/firewall.d/host.conf`. Variable mappings:
+### From v1.x
+
+The easiest way to upgrade:
+
+```bash
+binadit-firewall upgrade
+```
+
+Or run the installer — it automatically detects and migrates old configurations from `/etc/firewall.d/host.conf`.
+
+### From v2.0.x to v2.1.x
+
+Re-run the installer or use the upgrade command. Your configuration is preserved:
+
+```bash
+sudo bash install.sh          # detects existing install, preserves config
+# or
+binadit-firewall upgrade      # in-place upgrade
+```
+
+### Variable mappings (v1.x → v2.x)
 
 | Old (v1.x) | New (v2.0) |
 |---|---|
@@ -162,10 +203,7 @@ binadit-firewall/
 │       ├── backend_nftables.sh         # nftables implementation
 │       └── backend_iptables.sh         # iptables implementation
 ├── tests/
-│   └── test_firewall.sh               # Test suite (70+ tests)
-├── etc/                                # Legacy v1.x files (preserved for reference)
-│   ├── init.d/firewall
-│   └── firewall.d/host.conf
+│   └── test_firewall.sh               # Test suite (138+ tests)
 ├── CHANGELOG.md
 ├── LICENSE                             # GPL-2.0
 └── README.md
@@ -179,11 +217,13 @@ bash tests/test_firewall.sh
 
 Tests cover:
 - IPv4/IPv6/CIDR/port validation
-- Configuration file completeness
+- Configuration file completeness (including v2.1.0 features)
 - Project structure integrity
 - Systemd service correctness
-- Install script coverage
+- Install script coverage (including OpenRC, upgrade detection)
 - Backend function availability
+- UI functions (banners, rule summary)
+- Security features (SYN flood, conn limits, port forwarding)
 - Version consistency
 - Logging functions
 
@@ -228,3 +268,7 @@ GPL-2.0 — See [LICENSE](LICENSE) for details.
 Ronald Jonkers — [binadit](https://binadit.com)
 
 Originally created in 2013, completely rewritten in 2026 for modern Linux.
+
+---
+
+*binadit-firewall — making firewall management easy since 2013* 🛡️

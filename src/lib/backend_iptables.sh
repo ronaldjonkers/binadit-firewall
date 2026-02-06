@@ -224,11 +224,41 @@ ipt_apply() {
         $ipt -A OUTPUT -p icmp --icmp-type echo-reply -j ACCEPT
     fi
 
+    # SYN flood protection
+    if [[ "${SYN_FLOOD_PROTECT:-true}" == "true" ]]; then
+        $ipt -A INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 3 -j ACCEPT
+        $ipt -A INPUT -p tcp --syn -j DROP
+        log_debug "SYN flood protection enabled"
+    fi
+
+    # Connection limit per IP
+    if [[ "${CONN_LIMIT_ENABLE:-false}" == "true" ]]; then
+        local conn_limit="${CONN_LIMIT_PER_IP:-50}"
+        $ipt -A INPUT -p tcp -m connlimit --connlimit-above "$conn_limit" --connlimit-mask 32 -j DROP
+        log_debug "Connection limit: $conn_limit per IP"
+    fi
+
+    # Connection rate per IP
+    if [[ -n "${CONN_RATE_PER_IP:-}" ]] && [[ "${CONN_RATE_PER_IP:-0}" != "0" ]]; then
+        $ipt -A INPUT -p tcp -m conntrack --ctstate NEW -m recent --set --name CONNRATE
+        $ipt -A INPUT -p tcp -m conntrack --ctstate NEW -m recent --update --seconds 1 --hitcount "${CONN_RATE_PER_IP}" --name CONNRATE -j DROP
+        log_debug "Connection rate limit: ${CONN_RATE_PER_IP}/s per IP"
+    fi
+
+    # Block common attack ports
+    if [[ "${BLOCK_COMMON_ATTACKS:-true}" == "true" ]]; then
+        for aport in 23 135 137 138 139 445 1900; do
+            $ipt -A INPUT -p tcp --dport "$aport" -j DROP 2>/dev/null || true
+            $ipt -A INPUT -p udp --dport "$aport" -j DROP 2>/dev/null || true
+        done
+        log_debug "Common attack ports blocked"
+    fi
+
     # Rate limiting
     if [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]]; then
         local rate="${RATE_LIMIT_RATE:-25}"
         local burst="${RATE_LIMIT_BURST:-100}"
-        $ipt -A INPUT -p tcp --syn -m limit --limit "${rate}/s" --limit-burst "$burst" -j ACCEPT
+        $ipt -A INPUT -p tcp -m conntrack --ctstate NEW -m limit --limit "${rate}/s" --limit-burst "$burst" -j ACCEPT
     fi
 
     # Logging
@@ -248,6 +278,44 @@ ipt_apply() {
         $ipt -A FORWARD -i "$int_iface" -j ACCEPT
         $ipt -A FORWARD -o "$int_iface" -j ACCEPT
         log_info "NAT routing enabled ($int_iface -> $ext_iface)"
+
+        # Port forwarding (DNAT)
+        if [[ -n "${PORT_FORWARD_RULES:-}" ]]; then
+            local IFS_OLD="$IFS"
+            IFS=$'\n'
+            for rule in $PORT_FORWARD_RULES; do
+                IFS="$IFS_OLD"
+                local proto ext_port int_dest
+                proto=$(echo "$rule" | awk -F'|' '{print $1}' | xargs)
+                ext_port=$(echo "$rule" | awk -F'|' '{print $2}' | xargs)
+                int_dest=$(echo "$rule" | awk -F'|' '{print $3}' | xargs)
+                if [[ -n "$proto" && -n "$ext_port" && -n "$int_dest" ]]; then
+                    $ipt -t nat -A PREROUTING -p "$proto" --dport "$ext_port" -j DNAT --to-destination "$int_dest"
+                    local int_ip="${int_dest%%:*}"
+                    local int_port="${int_dest##*:}"
+                    $ipt -A FORWARD -p "$proto" -d "$int_ip" --dport "$int_port" -j ACCEPT
+                    log_debug "Port forward: $proto/$ext_port -> $int_dest"
+                fi
+                IFS=$'\n'
+            done
+            IFS="$IFS_OLD"
+        fi
+    fi
+
+    # Custom rules file
+    if [[ -n "${CUSTOM_RULES_FILE:-}" ]] && [[ -f "${CUSTOM_RULES_FILE}" ]]; then
+        log_info "Loading custom rules from ${CUSTOM_RULES_FILE}..."
+        local ipt_restore
+        ipt_restore=$(get_iptables_restore_cmd) || true
+        if [[ -n "${ipt_restore:-}" ]]; then
+            $ipt_restore --noflush < "${CUSTOM_RULES_FILE}" 2>/dev/null || \
+                log_warn "Failed to load custom rules (iptables-restore format)"
+        else
+            # Try sourcing as shell commands
+            # shellcheck source=/dev/null
+            source "${CUSTOM_RULES_FILE}" 2>/dev/null || \
+                log_warn "Failed to load custom rules"
+        fi
     fi
 
     # Save IPv4 rules

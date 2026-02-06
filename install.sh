@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.0.0 - Installer
+# binadit-firewall v2.1.0 - Installer
 # =============================================================================
 # Universal installer for Linux systems.
 # Supports: Debian/Ubuntu, CentOS/RHEL/Rocky/Alma, Fedora, Arch, Alpine, SUSE
@@ -272,6 +272,38 @@ install_dependencies() {
 }
 
 # =============================================================================
+# Detect existing v2.x installation (upgrade path)
+# =============================================================================
+
+detect_existing_install() {
+    if [[ -f "$SBIN_LINK" ]] || [[ -d "$INSTALL_DIR" ]]; then
+        local installed_version="unknown"
+        if [[ -f "$INSTALL_DIR/lib/common.sh" ]]; then
+            installed_version=$(grep "BINADIT_VERSION=" "$INSTALL_DIR/lib/common.sh" 2>/dev/null | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/' || echo "unknown")
+        fi
+
+        log_header "Existing Installation Detected"
+        log_info "Installed version: ${BOLD}v${installed_version}${NC}"
+        log_info "New version:       ${BOLD}v${BINADIT_VERSION}${NC}"
+
+        if [[ -f "${CONFIG_DIR}/firewall.conf" ]]; then
+            log_success "Existing configuration found - will be ${BOLD}preserved${NC}"
+        fi
+
+        if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            echo ""
+            read -rp "  Upgrade to v${BINADIT_VERSION}? [Y/n]: " do_upgrade
+            if [[ "${do_upgrade,,}" == "n" ]]; then
+                log_info "Upgrade cancelled"
+                exit 0
+            fi
+        fi
+
+        log_info "Upgrading binadit-firewall (config preserved)..."
+    fi
+}
+
+# =============================================================================
 # Install binadit-firewall files
 # =============================================================================
 
@@ -299,15 +331,56 @@ install_files() {
     cp "${INSTALLER_DIR}/config/firewall.conf.example" "${CONFIG_DIR}/firewall.conf.example"
     log_success "Example config: ${CONFIG_DIR}/firewall.conf.example"
 
-    # Install systemd service (if systemd is available)
+    # Install service for boot persistence
     if command -v systemctl &>/dev/null; then
+        # systemd (Debian 8+, Ubuntu 15+, CentOS 7+, Fedora 15+, Arch, SUSE 12+)
         cp "${INSTALLER_DIR}/config/binadit-firewall.service" "${SYSTEMD_DIR}/binadit-firewall.service"
         systemctl daemon-reload
         systemctl enable binadit-firewall.service
         log_success "Systemd service installed and enabled"
+    elif command -v rc-service &>/dev/null; then
+        # OpenRC (Alpine Linux, Gentoo)
+        log_info "OpenRC detected - installing OpenRC service"
+        cat > /etc/init.d/binadit-firewall <<'OPENRC_EOF'
+#!/sbin/openrc-run
+# binadit-firewall OpenRC service
+
+description="binadit-firewall - Simple Linux Firewall Manager"
+
+depend() {
+    need net
+    before firewall
+    after networking
+}
+
+start() {
+    ebegin "Starting binadit-firewall"
+    /usr/local/sbin/binadit-firewall start
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping binadit-firewall"
+    /usr/local/sbin/binadit-firewall stop
+    eend $?
+}
+
+restart() {
+    ebegin "Restarting binadit-firewall"
+    /usr/local/sbin/binadit-firewall restart
+    eend $?
+}
+
+status() {
+    /usr/local/sbin/binadit-firewall status
+}
+OPENRC_EOF
+        chmod 755 /etc/init.d/binadit-firewall
+        rc-update add binadit-firewall default 2>/dev/null || true
+        log_success "OpenRC service installed and enabled"
     else
-        # Fallback: install as init.d script for older systems
-        log_warn "systemd not found - creating init.d wrapper"
+        # SysVinit fallback (CentOS 6, Debian 7, older systems)
+        log_info "No systemd/OpenRC found - installing SysVinit script"
         cat > /etc/init.d/binadit-firewall <<'INITEOF'
 #!/bin/bash
 ### BEGIN INIT INFO
@@ -329,7 +402,7 @@ INITEOF
         elif command -v chkconfig &>/dev/null; then
             chkconfig binadit-firewall on
         fi
-        log_success "Init.d service installed"
+        log_success "SysVinit service installed"
     fi
 }
 
@@ -461,19 +534,15 @@ main() {
 
     require_root
 
-    echo ""
-    echo -e "${BOLD}${CYAN}"
-    echo "  ╔══════════════════════════════════════════════╗"
-    echo "  ║         binadit-firewall v${BINADIT_VERSION}            ║"
-    echo "  ║       Simple Linux Firewall Manager          ║"
-    echo "  ╚══════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo ""
+    show_banner
 
     local distro distro_family
     distro=$(detect_distro)
     distro_family=$(detect_distro_family)
     log_info "Detected OS: ${BOLD}${distro}${NC} (family: ${distro_family})"
+
+    # Step 0: Check for existing v2.x installation (upgrade path)
+    detect_existing_install
 
     # Step 1: Disable competing firewalls
     disable_competing_firewalls
@@ -522,19 +591,35 @@ main() {
 
     # Done
     echo ""
-    log_header "Installation Complete"
+    echo -e "${GREEN}${BOLD}"
+    cat <<'COMPLETE'
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                                                            ║
+    ║        ✅  INSTALLATION COMPLETE                           ║
+    ║                                                            ║
+    ╚══════════════════════════════════════════════════════════════╝
+COMPLETE
+    echo -e "${NC}"
     echo -e "  ${BOLD}Commands:${NC}"
     echo -e "    binadit-firewall start     ${GREEN}# Apply firewall rules${NC}"
     echo -e "    binadit-firewall stop      ${GREEN}# Disable firewall${NC}"
     echo -e "    binadit-firewall restart   ${GREEN}# Restart firewall${NC}"
-    echo -e "    binadit-firewall status    ${GREEN}# Show active rules${NC}"
+    echo -e "    binadit-firewall status    ${GREEN}# Show active rules & summary${NC}"
     echo -e "    binadit-firewall setup     ${GREEN}# Run setup wizard${NC}"
+    echo -e "    binadit-firewall upgrade   ${GREEN}# Upgrade from older version${NC}"
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
     echo -e "    ${CONFIG_DIR}/firewall.conf"
     echo ""
-    echo -e "  ${BOLD}Service:${NC}"
-    echo -e "    systemctl status binadit-firewall"
+    echo -e "  ${BOLD}Service management:${NC}"
+    if command -v systemctl &>/dev/null; then
+        echo -e "    systemctl status binadit-firewall"
+        echo -e "    systemctl restart binadit-firewall"
+    elif command -v rc-service &>/dev/null; then
+        echo -e "    rc-service binadit-firewall status"
+    else
+        echo -e "    service binadit-firewall status"
+    fi
     echo ""
 }
 
