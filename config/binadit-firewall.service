@@ -1,0 +1,17 @@
+[Unit]
+Description=binadit-firewall - Simple Linux Firewall Manager
+Documentation=https://github.com/ronaldjonkers/binadit-firewall
+After=network-pre.target
+Before=network.target
+Wants=network-pre.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/binadit-firewall start
+ExecStop=/usr/local/sbin/binadit-firewall stop
+ExecReload=/usr/local/sbin/binadit-firewall reload
+
+[Install]
+WantedBy=multi-user.target

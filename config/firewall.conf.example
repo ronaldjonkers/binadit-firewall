@@ -1,0 +1,144 @@
+# =============================================================================
+# binadit-firewall v2.0.0 - Configuration File
+# =============================================================================
+# Location: /etc/binadit-firewall/firewall.conf
+#
+# This file is sourced as a bash script. Use bash variable syntax.
+# Ports can be single (80) or ranges (8000:9000).
+# IPs can be single (1.2.3.4), CIDR (10.0.0.0/24), or hostnames.
+# Separate multiple values with spaces.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# TCP PORTS
+# -----------------------------------------------------------------------------
+# Ports open for both incoming and outgoing TCP traffic
+# Example: "22 80 443 8080 20000:25000"
+TCP_PORTS="80 443"
+
+# Ports open for incoming TCP connections only
+TCP_PORTS_INPUT=""
+
+# Ports open for outgoing TCP connections only
+TCP_PORTS_OUTPUT=""
+
+# -----------------------------------------------------------------------------
+# UDP PORTS
+# -----------------------------------------------------------------------------
+# Ports open for both incoming and outgoing UDP traffic
+# Example: "53 123 51820"
+UDP_PORTS=""
+
+# -----------------------------------------------------------------------------
+# BLOCKED PORTS
+# -----------------------------------------------------------------------------
+# TCP ports to explicitly block (overrides other rules)
+# Example: "23 135 139 445"
+BLOCKED_TCP_PORTS=""
+
+# UDP ports to explicitly block
+BLOCKED_UDP_PORTS=""
+
+# -----------------------------------------------------------------------------
+# SSH ACCESS
+# -----------------------------------------------------------------------------
+# Restrict SSH access to specific IPv4 addresses/hostnames
+# Leave empty to NOT add SSH-specific rules (SSH port must be in TCP_PORTS then)
+# Example: "1.2.3.4 office.example.com 10.0.0.0/24"
+SSH_ALLOWED_IPS=""
+
+# Restrict SSH access to specific IPv6 addresses (no hostnames!)
+# Example: "2001:db8::1 2001:db8::/32"
+SSH_ALLOWED_IPS_IPV6=""
+
+# -----------------------------------------------------------------------------
+# TRUSTED IPS (Full Access)
+# -----------------------------------------------------------------------------
+# IPv4 addresses, hostnames, or CIDR blocks with full server access
+# Example: "1.2.3.4 office.example.com 10.0.0.0/8"
+TRUSTED_IPS=""
+
+# IPv6 addresses or CIDR blocks with full server access
+# Example: "2001:db8::1 2001:db8::/32"
+TRUSTED_IPS_IPV6=""
+
+# Trusted IP ranges (dash notation for iptables, CIDR preferred for nftables)
+# Example: "192.168.1.1-192.168.1.254"
+TRUSTED_RANGES=""
+
+# Trusted IPv6 ranges
+TRUSTED_RANGES_IPV6=""
+
+# -----------------------------------------------------------------------------
+# BLACKLIST (Blocked IPs)
+# -----------------------------------------------------------------------------
+# IPv4 addresses or CIDR blocks to completely block
+# Example: "1.2.3.4 5.6.7.0/24"
+BLACKLIST=""
+
+# IPv6 addresses or CIDR blocks to completely block
+BLACKLIST_IPV6=""
+
+# Blocked IP ranges (dash notation)
+# Example: "65.208.151.1-65.208.151.254"
+BLOCKED_RANGES=""
+
+# Blocked IPv6 ranges
+BLOCKED_RANGES_IPV6=""
+
+# -----------------------------------------------------------------------------
+# PORT-SPECIFIC IP RULES
+# -----------------------------------------------------------------------------
+# Allow specific IPs to access specific ports.
+# Format: one rule per line, fields separated by pipe (|)
+#   protocol | port | ip_address
+#
+# Example:
+# PORT_IP_RULES="tcp|3306|10.0.0.5
+# tcp|5432|10.0.0.6
+# tcp|6379|192.168.1.0/24
+# udp|5060|sip.example.com"
+PORT_IP_RULES=""
+
+# -----------------------------------------------------------------------------
+# FEATURES
+# -----------------------------------------------------------------------------
+# Enable ICMP (ping) - recommended to keep enabled
+ICMP_ENABLE="true"
+
+# Enable multicast traffic (for load balancers, clusters)
+MULTICAST_ENABLE="false"
+
+# Enable outgoing SMTP (ports 25, 587)
+SMTP_ENABLE="true"
+
+# Enable connection rate limiting (DDoS protection)
+RATE_LIMIT_ENABLE="true"
+
+# Rate limit: connections per second (iptables) or "X/second" (nftables)
+RATE_LIMIT_RATE="25"
+
+# Rate limit burst
+RATE_LIMIT_BURST="100"
+
+# Log dropped packets to syslog
+LOG_DROPPED="true"
+
+# -----------------------------------------------------------------------------
+# NAT / ROUTING
+# -----------------------------------------------------------------------------
+# Enable NAT routing (for gateway/router setups)
+NAT_ENABLE="false"
+
+# External network interface (internet-facing)
+NAT_EXTERNAL_IFACE="eth0"
+
+# Internal network interface (LAN-facing)
+NAT_INTERNAL_IFACE="eth1"
+
+# -----------------------------------------------------------------------------
+# ADVANCED
+# -----------------------------------------------------------------------------
+# Enable debug logging (set to "true" for troubleshooting)
+# Can also be set via environment: BINADIT_DEBUG=true
+BINADIT_DEBUG="false"

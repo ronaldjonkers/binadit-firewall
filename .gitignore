@@ -1,0 +1,30 @@
+# binadit-firewall .gitignore
+
+# Configuration with secrets
+/config/firewall.conf
+*.env
+.env
+
+# Backups
+*.bak
+backups/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Old files (migrated)
+etc/init.d/firewall.old
+*.migrated.*
+
+# Test artifacts
+tests/tmp/
+tests/*.log
