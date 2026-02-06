@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.1.1
+# binadit-firewall v2.1.2
 # =============================================================================
 # A modern, easy-to-use Linux firewall manager with support for both
 # nftables and iptables backends.

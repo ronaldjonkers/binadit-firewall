@@ -5,7 +5,27 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-2.1.1-green.svg)]()
+[![Version](https://img.shields.io/badge/version-2.1.2-green.svg)]()
+
+## One-Line Install
+
+```bash
+curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
+```
+
+Or with `wget`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
+```
+
+For automated/unattended installs:
+
+```bash
+curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --non-interactive
+```
+
+That's it. The installer will detect your distro, install dependencies, disable competing firewalls, run the setup wizard, and start the firewall.
 
 ## Features
 
@@ -49,25 +69,12 @@ Manage your server's firewall through a single, clean configuration file. No com
 
 ## Quick Start
 
-### Install
+The fastest way is the **one-line installer** at the top of this page. Alternatively, clone and install manually:
 
 ```bash
 git clone https://github.com/ronaldjonkers/binadit-firewall.git
 cd binadit-firewall
 sudo bash install.sh
-```
-
-The installer will:
-1. Detect your Linux distribution
-2. Disable competing firewalls (firewalld, ufw, etc.)
-3. Install required dependencies
-4. Run the interactive setup wizard
-5. Start the firewall
-
-### Non-interactive Install
-
-```bash
-sudo bash install.sh --non-interactive
 ```
 
 ### Uninstall
@@ -196,6 +203,7 @@ binadit-firewall upgrade      # in-place upgrade
 
 ```
 binadit-firewall/
+├── get.sh                              # One-line installer bootstrap
 ├── install.sh                          # Universal installer
 ├── config/
 │   ├── firewall.conf.example           # Configuration template

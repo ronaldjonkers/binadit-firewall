@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.1.1 - Installer
+# binadit-firewall v2.1.2 - Installer
 # =============================================================================
 # Universal installer for Linux systems.
 # Supports: Debian/Ubuntu, CentOS/RHEL/Rocky/Alma, Fedora, Arch, Alpine, SUSE

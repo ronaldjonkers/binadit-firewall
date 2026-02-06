@@ -227,6 +227,7 @@ test_project_structure() {
     assert_file_exists "iptables backend exists"     "${LIB_DIR}/backend_iptables.sh"
     assert_file_exists "Example config exists"       "${CONFIG_DIR}/firewall.conf.example"
     assert_file_exists "Systemd service exists"      "${CONFIG_DIR}/binadit-firewall.service"
+    assert_file_exists "Bootstrap script exists"      "${PROJECT_DIR}/get.sh"
     assert_file_exists "Install script exists"       "${PROJECT_DIR}/install.sh"
     assert_file_exists "README exists"               "${PROJECT_DIR}/README.md"
     assert_file_exists "CHANGELOG exists"            "${PROJECT_DIR}/CHANGELOG.md"
@@ -607,7 +608,7 @@ test_version_consistency() {
     version_common=$(grep "BINADIT_VERSION=" "${LIB_DIR}/common.sh" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
     version_main=$(grep "binadit-firewall v" "${SRC_DIR}/binadit-firewall.sh" | head -1 | sed 's/.*v\([0-9.]*\).*/\1/' || echo "")
 
-    assert_equals "Version in common.sh" "2.1.1" "$version_common"
+    assert_equals "Version in common.sh" "2.1.2" "$version_common"
 
     # Check CHANGELOG has the version
     if [[ -f "${PROJECT_DIR}/CHANGELOG.md" ]]; then
