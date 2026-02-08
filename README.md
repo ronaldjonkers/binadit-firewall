@@ -5,7 +5,7 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-3.0.1-green.svg)]()
+[![Version](https://img.shields.io/badge/version-3.0.2-green.svg)]()
 
 ## One-Line Install
 

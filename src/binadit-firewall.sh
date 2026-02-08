@@ -920,8 +920,15 @@ fw_update() {
     log_info "Installed version: ${BOLD}v${BINADIT_VERSION}${NC}"
     log_info "Latest version:    ${BOLD}v${remote_version}${NC}"
 
+    # Compare versions using sort -V (version sort)
+    local higher
+    higher=$(printf '%s\n%s' "$BINADIT_VERSION" "$remote_version" | sort -V | tail -1)
+
     if [[ "$BINADIT_VERSION" == "$remote_version" ]]; then
         log_success "Already up to date!"
+        return 0
+    elif [[ "$higher" == "$BINADIT_VERSION" ]]; then
+        log_success "Installed version is newer than remote (v${remote_version}) — no update needed"
         return 0
     fi
 

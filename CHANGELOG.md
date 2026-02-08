@@ -5,6 +5,11 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.2] - 2026-02-08
+
+### Fixed
+- **Update version comparison**: `binadit-firewall update` now uses proper semver comparison (`sort -V`) instead of string equality. Prevents offering to "update" to an older version when GitHub CDN is caching.
+
 ## [3.0.1] - 2026-02-08
 
 ### Fixed
