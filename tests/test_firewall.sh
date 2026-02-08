@@ -507,6 +507,26 @@ test_security_features() {
     assert_contains "Main script: configtest command"      "${SRC_DIR}/binadit-firewall.sh" "fw_configtest"
     assert_contains "Main script: motd-on command"         "${SRC_DIR}/binadit-firewall.sh" "motd-on"
     assert_contains "Main script: motd-off command"        "${SRC_DIR}/binadit-firewall.sh" "motd-off"
+
+    # v2.2.0: CLI config management
+    assert_contains "Main script: fw_config function"      "${SRC_DIR}/binadit-firewall.sh" "fw_config()"
+    assert_contains "Main script: fw_config_show"          "${SRC_DIR}/binadit-firewall.sh" "fw_config_show"
+    assert_contains "Main script: fw_config_get"           "${SRC_DIR}/binadit-firewall.sh" "fw_config_get"
+    assert_contains "Main script: fw_config_set"           "${SRC_DIR}/binadit-firewall.sh" "fw_config_set"
+    assert_contains "Main script: fw_config_add"           "${SRC_DIR}/binadit-firewall.sh" "fw_config_add"
+    assert_contains "Main script: fw_config_remove"        "${SRC_DIR}/binadit-firewall.sh" "fw_config_remove"
+
+    # v2.2.0: features command
+    assert_contains "Main script: features command"        "${SRC_DIR}/binadit-firewall.sh" "fw_features"
+
+    # v2.2.0: self-update
+    assert_contains "Main script: update function"         "${SRC_DIR}/binadit-firewall.sh" "fw_update"
+    assert_contains "Main script: auto-update function"    "${SRC_DIR}/binadit-firewall.sh" "fw_auto_update"
+    assert_contains "Main script: cron.weekly path"        "${SRC_DIR}/binadit-firewall.sh" "cron.weekly"
+
+    # v2.2.0: valid config keys
+    assert_contains "Main script: VALID_CONFIG_KEYS"       "${SRC_DIR}/binadit-firewall.sh" "VALID_CONFIG_KEYS"
+    assert_contains "Main script: LIST_CONFIG_KEYS"        "${SRC_DIR}/binadit-firewall.sh" "LIST_CONFIG_KEYS"
 }
 
 # =============================================================================

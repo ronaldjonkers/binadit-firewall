@@ -103,23 +103,102 @@ sudo bash install.sh --uninstall
 ## Usage
 
 ```bash
-binadit-firewall start       # Apply firewall rules (shows protection banner)
-binadit-firewall stop        # Remove all rules (shows warning banner)
-binadit-firewall restart     # Stop and start
-binadit-firewall reload      # Reload configuration
-binadit-firewall status      # Show rule summary + active rules
-binadit-firewall configtest  # Validate config without applying
-binadit-firewall setup       # Interactive setup wizard
-binadit-firewall upgrade     # Upgrade from v1.x or update v2.x in-place
-binadit-firewall backup      # Create manual backup
-binadit-firewall motd-on     # Show firewall status on every login
-binadit-firewall motd-off    # Remove login status indicator
-binadit-firewall version     # Show version and system info
+# Firewall control
+binadit-firewall start                      # Apply firewall rules
+binadit-firewall stop                       # Remove all rules (allow all)
+binadit-firewall restart                    # Stop + start
+binadit-firewall reload                     # Re-read config and apply
+binadit-firewall status                     # Show rules and summary
+
+# Configuration via CLI (no need to edit files)
+binadit-firewall config show                # View all current settings
+binadit-firewall config get TCP_PORTS       # Get a specific setting
+binadit-firewall config set TCP_PORTS "80 443 8080"  # Set a value
+binadit-firewall config add TCP_PORTS 8080  # Add to a list setting
+binadit-firewall config remove TCP_PORTS 8080  # Remove from a list
+binadit-firewall configtest                 # Validate config before applying
+
+# Setup & documentation
+binadit-firewall setup                      # Interactive setup wizard
+binadit-firewall features                   # Full feature overview + docs
+
+# Updates
+binadit-firewall update                     # Download & install latest version
+binadit-firewall auto-update on             # Enable weekly auto-updates (cron)
+binadit-firewall auto-update off            # Disable auto-updates
+binadit-firewall auto-update status         # Show auto-update status & log
+binadit-firewall upgrade                    # Upgrade from v1.x or older v2.x
+
+# System
+binadit-firewall backup                     # Create manual backup
+binadit-firewall motd-on                    # Show firewall status on login
+binadit-firewall motd-off                   # Remove login status indicator
+binadit-firewall version                    # Show version and system info
+binadit-firewall help                       # Show all commands
 ```
+
+### CLI Configuration Management
+
+You can manage **all** firewall settings directly from the command line — no need to edit files manually:
+
+```bash
+# View all current settings in a formatted table
+binadit-firewall config show
+
+# Open port 8080
+binadit-firewall config add TCP_PORTS 8080
+binadit-firewall configtest    # Validate
+binadit-firewall restart       # Apply
+
+# Block an IP
+binadit-firewall config add BLACKLIST 1.2.3.4
+binadit-firewall restart
+
+# Restrict SSH to specific IPs
+binadit-firewall config set SSH_ALLOWED_IPS "10.0.0.1 office.example.com"
+binadit-firewall restart
+
+# Enable SYN flood protection
+binadit-firewall config set SYN_FLOOD_PROTECT true
+binadit-firewall restart
+
+# Remove a port
+binadit-firewall config remove TCP_PORTS 8080
+binadit-firewall restart
+
+# Get a single value (scriptable)
+binadit-firewall config get TCP_PORTS
+```
+
+**List-type settings** (support `add`/`remove`): `TCP_PORTS`, `UDP_PORTS`, `BLOCKED_TCP_PORTS`, `BLOCKED_UDP_PORTS`, `SSH_ALLOWED_IPS`, `TRUSTED_IPS`, `TRUSTED_RANGES`, `BLACKLIST`, `BLOCKED_RANGES` (and their IPv6 variants).
+
+**All other settings** use `config set` (e.g., booleans, numbers, interfaces).
+
+Run `binadit-firewall features` for a complete reference of every setting with descriptions and defaults.
+
+### Self-Update
+
+```bash
+# Check for updates and install
+binadit-firewall update
+
+# Enable weekly automatic updates (uses /etc/cron.weekly/)
+binadit-firewall auto-update on
+
+# Check auto-update status
+binadit-firewall auto-update status
+
+# Disable auto-updates
+binadit-firewall auto-update off
+```
+
+Updates only replace program files — your configuration is **always preserved**. The auto-update cron job runs weekly and logs to `/var/log/binadit-firewall-update.log`.
+
+During installation, you are offered the option to enable weekly auto-updates automatically.
 
 ## Configuration
 
-Edit `/etc/binadit-firewall/firewall.conf`:
+Edit `/etc/binadit-firewall/firewall.conf` or use `binadit-firewall config` commands:
 
 ```bash
 # Open TCP ports (space-separated, ranges with colon)

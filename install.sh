@@ -959,15 +959,26 @@ COMPLETE
         fi
     fi
 
+    # Offer weekly auto-updates
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        echo ""
+        read -rp "  Enable weekly automatic updates? [Y/n]: " enable_autoupdate
+        if [[ "${enable_autoupdate,,}" != "n" ]]; then
+            "$SBIN_LINK" auto-update on
+        fi
+    fi
+
+    echo ""
     echo -e "  ${BOLD}Commands:${NC}"
-    echo -e "    binadit-firewall start       ${GREEN}# Apply firewall rules${NC}"
-    echo -e "    binadit-firewall stop        ${GREEN}# Disable firewall${NC}"
-    echo -e "    binadit-firewall restart     ${GREEN}# Restart firewall${NC}"
-    echo -e "    binadit-firewall status      ${GREEN}# Show active rules & summary${NC}"
-    echo -e "    binadit-firewall configtest  ${GREEN}# Validate config without applying${NC}"
-    echo -e "    binadit-firewall setup       ${GREEN}# Run setup wizard${NC}"
-    echo -e "    binadit-firewall upgrade     ${GREEN}# Upgrade from older version${NC}"
-    echo -e "    binadit-firewall motd-on     ${GREEN}# Show status on login${NC}"
+    echo -e "    binadit-firewall start        ${GREEN}# Apply firewall rules${NC}"
+    echo -e "    binadit-firewall stop         ${GREEN}# Disable firewall${NC}"
+    echo -e "    binadit-firewall status       ${GREEN}# Show active rules & summary${NC}"
+    echo -e "    binadit-firewall config show  ${GREEN}# View all settings${NC}"
+    echo -e "    binadit-firewall config set   ${GREEN}# Change a setting via CLI${NC}"
+    echo -e "    binadit-firewall configtest   ${GREEN}# Validate config${NC}"
+    echo -e "    binadit-firewall update       ${GREEN}# Download latest version${NC}"
+    echo -e "    binadit-firewall features     ${GREEN}# Full feature documentation${NC}"
+    echo -e "    binadit-firewall help         ${GREEN}# All commands${NC}"
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
     echo -e "    ${CONFIG_DIR}/firewall.conf"
