@@ -73,7 +73,9 @@ ipt_apply() {
 
     # Connection tracking
     $ipt -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    $ipt -A INPUT -m conntrack --ctstate INVALID -j DROP
+    if [[ "${DROP_INVALID:-true}" == "true" ]]; then
+        $ipt -A INPUT -m conntrack --ctstate INVALID -j DROP
+    fi
 
     # Blacklist (inserted at top, before other rules)
     for ip in $BLACKLIST; do
@@ -321,7 +323,9 @@ ipt_apply() {
 
         # Connection tracking
         $ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        $ipt6 -A INPUT -m conntrack --ctstate INVALID -j DROP
+        if [[ "${DROP_INVALID:-true}" == "true" ]]; then
+            $ipt6 -A INPUT -m conntrack --ctstate INVALID -j DROP
+        fi
 
         # Blacklist IPv6
         for ip in $BLACKLIST_IPV6; do
@@ -334,6 +338,32 @@ ipt_apply() {
             for range in $BLOCKED_RANGES_IPV6; do
                 $ipt6 -I INPUT 1 -s "$range" -j DROP
                 $ipt6 -I OUTPUT 1 -d "$range" -j DROP
+            done
+        fi
+
+        # Blocked ports IPv6 (both directions)
+        if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
+            for port in $BLOCKED_TCP_PORTS; do
+                $ipt6 -A INPUT -p tcp --dport "$port" -j DROP
+                $ipt6 -A OUTPUT -p tcp --dport "$port" -j DROP
+            done
+        fi
+        if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
+            for port in $BLOCKED_UDP_PORTS; do
+                $ipt6 -A INPUT -p udp --dport "$port" -j DROP
+                $ipt6 -A OUTPUT -p udp --dport "$port" -j DROP
+            done
+        fi
+
+        # Blocked outgoing ports IPv6
+        if [[ -n "${BLOCKED_TCP_PORTS_OUTPUT:-}" ]]; then
+            for port in $BLOCKED_TCP_PORTS_OUTPUT; do
+                $ipt6 -A OUTPUT -p tcp --dport "$port" -j DROP
+            done
+        fi
+        if [[ -n "${BLOCKED_UDP_PORTS_OUTPUT:-}" ]]; then
+            for port in $BLOCKED_UDP_PORTS_OUTPUT; do
+                $ipt6 -A OUTPUT -p udp --dport "$port" -j DROP
             done
         fi
 
@@ -380,6 +410,33 @@ ipt_apply() {
             $ipt6 -A INPUT -d ff00::/8 -j ACCEPT
             $ipt6 -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
             $ipt6 -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
+        fi
+
+        # SYN flood protection IPv6
+        if [[ "${SYN_FLOOD_PROTECT:-true}" == "true" ]]; then
+            $ipt6 -A INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 3 -j ACCEPT
+            $ipt6 -A INPUT -p tcp --syn -j DROP
+        fi
+
+        # Connection limit per IP IPv6
+        if [[ "${CONN_LIMIT_ENABLE:-false}" == "true" ]]; then
+            local conn_limit="${CONN_LIMIT_PER_IP:-50}"
+            $ipt6 -A INPUT -p tcp -m connlimit --connlimit-above "$conn_limit" --connlimit-mask 64 -j DROP
+        fi
+
+        # Block common attack ports IPv6
+        if [[ "${BLOCK_COMMON_ATTACKS:-true}" == "true" ]]; then
+            for aport in 23 135 137 138 139 445 1900; do
+                $ipt6 -A INPUT -p tcp --dport "$aport" -j DROP 2>/dev/null || true
+                $ipt6 -A INPUT -p udp --dport "$aport" -j DROP 2>/dev/null || true
+            done
+        fi
+
+        # Rate limiting IPv6
+        if [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]]; then
+            local rate="${RATE_LIMIT_RATE:-25}"
+            local burst="${RATE_LIMIT_BURST:-100}"
+            $ipt6 -A INPUT -p tcp -m conntrack --ctstate NEW -m limit --limit "${rate}/s" --limit-burst "$burst" -j ACCEPT
         fi
 
         # ICMPv6 — essential types always allowed for IPv6 to function

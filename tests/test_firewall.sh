@@ -546,6 +546,18 @@ test_security_features() {
     assert_contains "iptables: outgoing UDP block"          "${LIB_DIR}/backend_iptables.sh" "BLOCKED_UDP_PORTS_OUTPUT"
     assert_contains "Config: outgoing TCP block"            "${CONFIG_DIR}/firewall.conf.example" "BLOCKED_TCP_PORTS_OUTPUT"
     assert_contains "Config: outgoing UDP block"            "${CONFIG_DIR}/firewall.conf.example" "BLOCKED_UDP_PORTS_OUTPUT"
+
+    # v2.2.0: full backend audit — IPv6 parity and config options
+    assert_contains "iptables: IPv6 blocked TCP ports"       "${LIB_DIR}/backend_iptables.sh" "Blocked ports IPv6"
+    assert_contains "iptables: IPv6 blocked output ports"    "${LIB_DIR}/backend_iptables.sh" "Blocked outgoing ports IPv6"
+    assert_contains "iptables: IPv6 SYN flood"               "${LIB_DIR}/backend_iptables.sh" "SYN flood protection IPv6"
+    assert_contains "iptables: IPv6 rate limit"              "${LIB_DIR}/backend_iptables.sh" "Rate limiting IPv6"
+    assert_contains "iptables: IPv6 common attacks"          "${LIB_DIR}/backend_iptables.sh" "Block common attack ports IPv6"
+    assert_contains "iptables: IPv6 conn limit"              "${LIB_DIR}/backend_iptables.sh" "Connection limit per IP IPv6"
+    assert_contains "nftables: DROP_INVALID check"           "${LIB_DIR}/backend_nftables.sh" "DROP_INVALID"
+    assert_contains "iptables: DROP_INVALID check"           "${LIB_DIR}/backend_iptables.sh" "DROP_INVALID"
+    assert_contains "nftables: CUSTOM_RULES_FILE"            "${LIB_DIR}/backend_nftables.sh" "CUSTOM_RULES_FILE"
+    assert_contains "Config: default TCP_PORTS 80 443"       "${CONFIG_DIR}/firewall.conf.example" 'TCP_PORTS="80 443"'
 }
 
 # =============================================================================

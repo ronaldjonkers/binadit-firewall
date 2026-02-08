@@ -104,7 +104,9 @@ nft_apply() {
     ruleset+="\n"
     ruleset+="        # Connection tracking\n"
     ruleset+="        ct state established,related accept\n"
-    ruleset+="        ct state invalid drop\n"
+    if [[ "${DROP_INVALID:-true}" == "true" ]]; then
+        ruleset+="        ct state invalid drop\n"
+    fi
     ruleset+="\n"
     ruleset+="        # Blacklists\n"
     ruleset+="        ip saddr @blacklist_v4 drop\n"
@@ -389,6 +391,16 @@ nft_apply() {
         return 1
     fi
     rm -f "$apply_file"
+
+    # Custom rules file (nft format, appended after main ruleset)
+    if [[ -n "${CUSTOM_RULES_FILE:-}" ]] && [[ -f "${CUSTOM_RULES_FILE}" ]]; then
+        log_info "Loading custom rules from ${CUSTOM_RULES_FILE}..."
+        if nft -f "${CUSTOM_RULES_FILE}" 2>/dev/null; then
+            log_success "Custom rules loaded"
+        else
+            log_warn "Failed to load custom rules from ${CUSTOM_RULES_FILE}"
+        fi
+    fi
 
     # Enable IP forwarding if NAT is enabled
     if [[ "${NAT_ENABLE:-false}" == "true" ]]; then
