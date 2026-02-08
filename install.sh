@@ -946,14 +946,8 @@ main() {
 
     # Step 6: Start firewall
     echo ""
-    if [[ "$NON_INTERACTIVE" == "true" ]]; then
-        "$SBIN_LINK" start
-    else
-        read -rp "Start firewall now? [Y/n]: " start_now
-        if [[ "${start_now,,}" != "n" ]]; then
-            "$SBIN_LINK" start
-        fi
-    fi
+    log_header "Starting firewall"
+    "$SBIN_LINK" start || log_warn "Firewall start failed — run 'binadit-firewall start' manually"
 
     # Done
     echo ""
@@ -1011,6 +1005,15 @@ CRONEOF
         read -rp "  Show firewall status on every login (motd)? [Y/n]: " install_motd
         if [[ "${install_motd,,}" != "n" ]]; then
             "$SBIN_LINK" motd-on 2>/dev/null || log_warn "Could not install MOTD script"
+        fi
+    fi
+
+    # Offer prompt indicator (🟢/🔴)
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        echo ""
+        read -rp "  Show 🟢/🔴 firewall status emoji in your prompt? [Y/n]: " install_prompt
+        if [[ "${install_prompt,,}" != "n" ]]; then
+            "$SBIN_LINK" prompt-on 2>/dev/null || log_warn "Could not install prompt indicator"
         fi
     fi
 

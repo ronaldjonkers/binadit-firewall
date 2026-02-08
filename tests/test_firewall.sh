@@ -527,6 +527,15 @@ test_security_features() {
     # v2.2.0: valid config keys
     assert_contains "Main script: VALID_CONFIG_KEYS"       "${SRC_DIR}/binadit-firewall.sh" "VALID_CONFIG_KEYS"
     assert_contains "Main script: LIST_CONFIG_KEYS"        "${SRC_DIR}/binadit-firewall.sh" "LIST_CONFIG_KEYS"
+
+    # v2.2.0: prompt indicator
+    assert_contains "Main script: prompt-on command"       "${SRC_DIR}/binadit-firewall.sh" "prompt-on"
+    assert_contains "Main script: prompt-off command"      "${SRC_DIR}/binadit-firewall.sh" "prompt-off"
+    assert_contains "Main script: fw_install_prompt"       "${SRC_DIR}/binadit-firewall.sh" "fw_install_prompt"
+    assert_contains "Main script: fw_remove_prompt"        "${SRC_DIR}/binadit-firewall.sh" "fw_remove_prompt"
+
+    # v2.2.0: MOTD sanitized output
+    assert_contains "Main script: MOTD head sanitization"  "${SRC_DIR}/binadit-firewall.sh" "head -1"
 }
 
 # =============================================================================

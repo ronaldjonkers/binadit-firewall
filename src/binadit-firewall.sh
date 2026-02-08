@@ -8,7 +8,7 @@
 # Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
 # License: GPL-2.0
 #
-# Usage: binadit-firewall {start|stop|restart|status|reload|config|configtest|setup|features|update|auto-update|upgrade|backup|motd-on|motd-off|version|help}
+# Usage: binadit-firewall {start|stop|restart|status|reload|config|configtest|setup|features|update|auto-update|upgrade|backup|motd-on|motd-off|prompt-on|prompt-off|version|help}
 # =============================================================================
 
 set -euo pipefail
@@ -162,21 +162,31 @@ fw_install_motd() {
 # Remove with: binadit-firewall motd-off
 
 if [ "$(id -u)" = "0" ] || id -nG 2>/dev/null | grep -qw sudo; then
+    _bf_active=0
+    _bf_detail=""
     if command -v nft >/dev/null 2>&1; then
-        _rules=$(nft list ruleset 2>/dev/null | grep -c "chain" 2>/dev/null || echo 0)
-        if [ "$_rules" -gt 0 ]; then
-            printf '\033[0;32m  \xE2\x96\xB8 binadit-firewall: active (%s chains)\033[0m\n' "$_rules"
-        else
-            printf '\033[0;31m  \xE2\x9A\xA0 binadit-firewall: NOT ACTIVE — run: binadit-firewall start\033[0m\n'
+        _bf_chains=$(nft list ruleset 2>/dev/null | grep -c "^[[:space:]]*chain " || true)
+        _bf_chains=$(echo "$_bf_chains" | head -1 | tr -d '[:space:]')
+        [ -z "$_bf_chains" ] && _bf_chains=0
+        if [ "$_bf_chains" -gt 0 ] 2>/dev/null; then
+            _bf_active=1
+            _bf_detail="$_bf_chains chains"
         fi
     elif command -v iptables >/dev/null 2>&1; then
-        _rules=$(iptables -S 2>/dev/null | grep -cv '^\-P' 2>/dev/null || echo 0)
-        if [ "$_rules" -gt 2 ]; then
-            printf '\033[0;32m  \xE2\x96\xB8 binadit-firewall: active (%s rules)\033[0m\n' "$_rules"
-        else
-            printf '\033[0;31m  \xE2\x9A\xA0 binadit-firewall: NOT ACTIVE — run: binadit-firewall start\033[0m\n'
+        _bf_rules=$(iptables -S 2>/dev/null | grep -cv '^\-P' || true)
+        _bf_rules=$(echo "$_bf_rules" | head -1 | tr -d '[:space:]')
+        [ -z "$_bf_rules" ] && _bf_rules=0
+        if [ "$_bf_rules" -gt 2 ] 2>/dev/null; then
+            _bf_active=1
+            _bf_detail="$_bf_rules rules"
         fi
     fi
+    if [ "$_bf_active" = "1" ]; then
+        printf '\033[0;32m  \xE2\x96\xB8 binadit-firewall: active (%s)\033[0m\n' "$_bf_detail"
+    else
+        printf '\033[0;31m  \xE2\x9A\xA0 binadit-firewall: NOT ACTIVE \xe2\x80\x94 run: binadit-firewall start\033[0m\n'
+    fi
+    unset _bf_active _bf_detail _bf_chains _bf_rules
 fi
 MOTD_EOF
 
@@ -196,6 +206,62 @@ fw_remove_motd() {
         log_success "Login status indicator removed"
     else
         log_info "Login status indicator was not installed"
+    fi
+}
+
+# Install PS1 prompt indicator (🟢/🔴 before prompt)
+fw_install_prompt() {
+    require_root
+
+    local prompt_script="/etc/profile.d/binadit-firewall-prompt.sh"
+
+    cat > "$prompt_script" <<'PROMPT_EOF'
+#!/bin/bash
+# binadit-firewall PS1 prompt indicator
+# Shows 🟢 (active) or 🔴 (inactive) before your prompt
+# Remove with: binadit-firewall prompt-off
+
+__binadit_fw_status() {
+    if command -v nft >/dev/null 2>&1; then
+        local _c
+        _c=$(nft list ruleset 2>/dev/null | grep -c "^[[:space:]]*chain " 2>/dev/null || true)
+        _c=$(echo "$_c" | head -1 | tr -d '[:space:]')
+        [ -n "$_c" ] && [ "$_c" -gt 0 ] 2>/dev/null && printf '🟢' && return
+    elif command -v iptables >/dev/null 2>&1; then
+        local _r
+        _r=$(iptables -S 2>/dev/null | grep -cv '^\-P' 2>/dev/null || true)
+        _r=$(echo "$_r" | head -1 | tr -d '[:space:]')
+        [ -n "$_r" ] && [ "$_r" -gt 2 ] 2>/dev/null && printf '🟢' && return
+    fi
+    printf '🔴'
+}
+
+if [ "$(id -u)" = "0" ] || id -nG 2>/dev/null | grep -qw sudo 2>/dev/null; then
+    if [ -n "$BASH_VERSION" ]; then
+        PROMPT_COMMAND='__binadit_fw_ps1=$(__binadit_fw_status)'${PROMPT_COMMAND:+";$PROMPT_COMMAND"}
+        PS1='${__binadit_fw_ps1} '"$PS1"
+    fi
+fi
+PROMPT_EOF
+
+    chmod 644 "$prompt_script"
+    log_success "Prompt indicator installed: ${prompt_script}"
+    log_info "🟢 = firewall active, 🔴 = firewall inactive"
+    log_info "Remove with: ${BOLD}binadit-firewall prompt-off${NC}"
+    log_info "Takes effect on next login"
+}
+
+# Remove PS1 prompt indicator
+fw_remove_prompt() {
+    require_root
+
+    local prompt_script="/etc/profile.d/binadit-firewall-prompt.sh"
+    if [[ -f "$prompt_script" ]]; then
+        rm -f "$prompt_script"
+        log_success "Prompt indicator removed"
+        log_info "Takes effect on next login"
+    else
+        log_info "Prompt indicator was not installed"
     fi
 }
 
@@ -513,6 +579,10 @@ fw_features() {
   ${GREEN}backup${NC}          Manually create a backup of current rules.
   ${GREEN}motd-on${NC}         Show one-line firewall status on every SSH login.
   ${GREEN}motd-off${NC}        Remove the login status indicator.
+  ${GREEN}prompt-on${NC}       Show 🟢/🔴 emoji before your shell prompt.
+                  🟢 = firewall active, 🔴 = firewall inactive.
+                  Updates on every command. Works in bash.
+  ${GREEN}prompt-off${NC}      Remove the prompt indicator.
   ${GREEN}LOG_DROPPED${NC}     Log dropped packets to syslog. Default: true.
                   View logs: ${BOLD}journalctl -k | grep binadit-drop${NC}
 
@@ -1009,6 +1079,8 @@ fw_help() {
       ${GREEN}backup${NC}              Create a backup of current rules
       ${GREEN}motd-on${NC}             Show firewall status on every login
       ${GREEN}motd-off${NC}            Remove login status indicator
+      ${GREEN}prompt-on${NC}           Show 🟢/🔴 emoji before prompt
+      ${GREEN}prompt-off${NC}          Remove prompt indicator
       ${GREEN}version${NC}             Show version and system info
       ${GREEN}help${NC}                Show this help message
 
@@ -1076,6 +1148,12 @@ case "${1:-help}" in
         ;;
     motd-off)
         fw_remove_motd
+        ;;
+    prompt-on)
+        fw_install_prompt
+        ;;
+    prompt-off)
+        fw_remove_prompt
         ;;
     backup)
         require_root

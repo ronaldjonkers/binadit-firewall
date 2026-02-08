@@ -133,6 +133,8 @@ binadit-firewall upgrade                    # Upgrade from v1.x or older v2.x
 binadit-firewall backup                     # Create manual backup
 binadit-firewall motd-on                    # Show firewall status on login
 binadit-firewall motd-off                   # Remove login status indicator
+binadit-firewall prompt-on                  # Show 🟢/🔴 emoji in shell prompt
+binadit-firewall prompt-off                 # Remove prompt indicator
 binadit-firewall version                    # Show version and system info
 binadit-firewall help                       # Show all commands
 ```
@@ -195,6 +197,30 @@ binadit-firewall auto-update off
 Updates only replace program files — your configuration is **always preserved**. The auto-update cron job runs weekly and logs to `/var/log/binadit-firewall-update.log`.
 
 During installation, you are offered the option to enable weekly auto-updates automatically.
+
+### Prompt Indicator
+
+Show a live firewall status emoji before your shell prompt:
+
+```bash
+# Enable — shows 🟢 (active) or 🔴 (inactive) before every prompt
+binadit-firewall prompt-on
+
+# Disable
+binadit-firewall prompt-off
+```
+
+Example with firewall active:
+```
+🟢 [root@server ~]#
+```
+
+Example with firewall stopped:
+```
+🔴 [root@server ~]#
+```
+
+The indicator updates on every command, so you'll immediately see if the firewall goes down. Works in bash. Takes effect on next login.
 
 ## Configuration
 
