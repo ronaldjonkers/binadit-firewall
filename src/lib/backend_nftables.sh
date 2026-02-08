@@ -228,6 +228,11 @@ nft_apply() {
         ruleset+="        ip protocol icmp icmp type { echo-reply, destination-unreachable, echo-request, time-exceeded, parameter-problem } accept\n"
         ruleset+="\n        # ICMPv6 (required for IPv6 to function)\n"
         ruleset+="        ip6 nexthdr icmpv6 icmpv6 type { echo-reply, echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n"
+    else
+        ruleset+="\n        # ICMP disabled — drop ping but allow essential ICMPv6 for IPv6\n"
+        ruleset+="        ip protocol icmp drop\n"
+        ruleset+="        ip6 nexthdr icmpv6 icmpv6 type { echo-request, echo-reply } drop\n"
+        ruleset+="        ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n"
     fi
 
     # Multicast
