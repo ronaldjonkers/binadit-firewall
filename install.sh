@@ -358,6 +358,19 @@ service_selection_menu() {
     local -a menu_proto=() menu_port=() menu_proc=() menu_name=() menu_enabled=()
     local idx=0
 
+    # Always include HTTP (80) and HTTPS (443) even if not detected
+    local -a always_tcp_ports=(80 443)
+    for aport in "${always_tcp_ports[@]}"; do
+        local already=false
+        for existing in "${tcp_ports[@]+"${tcp_ports[@]}"}"; do
+            [[ "$existing" == "$aport" ]] && already=true && break
+        done
+        if [[ "$already" == "false" ]]; then
+            tcp_ports+=("$aport")
+            tcp_procs+=("not running")
+        fi
+    done
+
     for i in "${!tcp_ports[@]}"; do
         local port="${tcp_ports[$i]}"
         local proc="${tcp_procs[$i]}"
