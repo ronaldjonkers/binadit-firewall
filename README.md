@@ -5,7 +5,7 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-2.1.2-green.svg)]()
+[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)]()
 
 ## One-Line Install
 
@@ -33,7 +33,7 @@ That's it. The installer will detect your distro, install dependencies, disable 
 - **One config file** — All rules in `/etc/binadit-firewall/firewall.conf`
 - **Beautiful output** — ASCII art banners, colored rule summaries, clear status indicators
 - **IPv4 + IPv6** — Full dual-stack support
-- **Port blocking** — Block specific ports explicitly
+- **Port blocking** — Block specific ports inbound, outbound, or both directions
 - **IP-per-port rules** — Allow specific IPs for specific ports (e.g., MySQL only from `10.0.0.5`)
 - **Port forwarding** — DNAT rules for forwarding external ports to internal IPs
 - **IP ranges** — CIDR and dash-notation support for trusted/blocked ranges
@@ -172,7 +172,7 @@ binadit-firewall restart
 binadit-firewall config get TCP_PORTS
 ```
 
-**List-type settings** (support `add`/`remove`): `TCP_PORTS`, `UDP_PORTS`, `BLOCKED_TCP_PORTS`, `BLOCKED_UDP_PORTS`, `SSH_ALLOWED_IPS`, `TRUSTED_IPS`, `TRUSTED_RANGES`, `BLACKLIST`, `BLOCKED_RANGES` (and their IPv6 variants).
+**List-type settings** (support `add`/`remove`): `TCP_PORTS`, `UDP_PORTS`, `BLOCKED_TCP_PORTS`, `BLOCKED_UDP_PORTS`, `BLOCKED_TCP_PORTS_OUTPUT`, `BLOCKED_UDP_PORTS_OUTPUT`, `SSH_ALLOWED_IPS`, `TRUSTED_IPS`, `TRUSTED_RANGES`, `BLACKLIST`, `BLOCKED_RANGES` (and their IPv6 variants).
 
 **All other settings** use `config set` (e.g., booleans, numbers, interfaces).
 
@@ -261,7 +261,7 @@ BLOCKED_RANGES="65.208.151.1-65.208.151.254"
 # Features
 ICMP_ENABLE="true"           # Allow ping
 MULTICAST_ENABLE="false"     # For clusters/load balancers
-SMTP_ENABLE="true"           # Outgoing mail
+# SMTP_ENABLE — deprecated (outgoing is open by default)
 RATE_LIMIT_ENABLE="true"     # DDoS protection
 LOG_DROPPED="true"           # Log dropped packets
 
@@ -341,7 +341,7 @@ binadit-firewall/
 │       ├── backend_nftables.sh         # nftables implementation
 │       └── backend_iptables.sh         # iptables implementation
 ├── tests/
-│   └── test_firewall.sh               # Test suite (148+ tests)
+│   └── test_firewall.sh               # Test suite (188 tests)
 ├── CHANGELOG.md
 ├── LICENSE                             # GPL-2.0
 └── README.md
@@ -355,7 +355,7 @@ bash tests/test_firewall.sh
 
 Tests cover:
 - IPv4/IPv6/CIDR/port validation
-- Configuration file completeness (including v2.1.0 features)
+- Configuration file completeness (including v2.2.0 features)
 - Project structure integrity
 - Systemd service correctness
 - Install script coverage (including OpenRC, upgrade detection)

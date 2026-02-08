@@ -5,6 +5,32 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-02-08
+
+### Added
+- **Outgoing port blocking**: New `BLOCKED_TCP_PORTS_OUTPUT` and `BLOCKED_UDP_PORTS_OUTPUT` config keys to block outgoing ports only (e.g., `"25 587"` to block outgoing SMTP/email)
+- **CUSTOM_RULES_FILE support in nftables**: Custom rules file now works in both backends (was iptables-only)
+- **iptables IPv6 security hardening**: Added SYN flood protection, rate limiting, connection limits, and common attack port blocking to IPv6 rules (were completely missing)
+- **iptables IPv6 port blocking**: `BLOCKED_TCP/UDP_PORTS` and `BLOCKED_TCP/UDP_PORTS_OUTPUT` now applied to IPv6 (were IPv4-only)
+
+### Changed
+- **OUTPUT policy: ACCEPT** — Firewall now only protects inbound traffic by default. All outgoing connections (DNS, HTTP, NTP, SMTP, etc.) work without explicit rules. Use `BLOCKED_*_OUTPUT` to restrict specific outgoing ports.
+- **SMTP_ENABLE deprecated** — Outgoing mail works by default (OUTPUT accept). To block outgoing SMTP, use `BLOCKED_TCP_PORTS_OUTPUT="25 587"` instead
+- **DROP_INVALID** now respects config — Was always hardcoded to true, now checks the `DROP_INVALID` config option in both backends
+- **ICMP blocking** — When `ICMP_ENABLE=false`, explicit drop rules are added before the rate limiter in nftables (previously the rate limiter catch-all accepted ICMP packets)
+
+### Fixed
+- **nftables SYN flood rule**: Fixed syntax error — `burst 3` changed to `burst 3 packets` (nft requires `packets` keyword)
+- **Firewall not starting**: Fixed `get_backend()` stdout pollution — `log_info` output was captured by command substitution, causing "Unsupported backend" error
+- **nftables ruleset syntax**: Removed invalid shell syntax (`2>/dev/null || true`) from generated nft file
+- **nftables rate limit unit**: `RATE_LIMIT_RATE` now automatically appends `/second` if no unit specified
+- **nftables error reporting**: `nft -f` errors are now displayed instead of silenced
+- **SSH lockout prevention**: Both backends now explicitly allow SSH when port is not in `TCP_PORTS` and `SSH_ALLOWED_IPS` is empty
+- **ICMP/ping not blocked**: Fixed nftables rate limiter (`ct state new limit rate ... accept`) accepting ICMP before policy drop
+
+### Tests
+- Test suite expanded from 148 to 188 tests
+
 ## [2.1.2] - 2026-02-06
 
 ### Added

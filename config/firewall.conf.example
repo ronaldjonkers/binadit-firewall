@@ -1,5 +1,5 @@
 # =============================================================================
-# binadit-firewall v2.1.2 - Configuration File
+# binadit-firewall v2.2.0 - Configuration File
 # =============================================================================
 # Location: /etc/binadit-firewall/firewall.conf
 #
@@ -119,7 +119,8 @@ ICMP_ENABLE="true"
 # Enable multicast traffic (for load balancers, clusters)
 MULTICAST_ENABLE="false"
 
-# Enable outgoing SMTP (ports 25, 587)
+# DEPRECATED: outgoing traffic is open by default (OUTPUT policy accept).
+# To block outgoing SMTP, use BLOCKED_TCP_PORTS_OUTPUT="25 587" instead.
 SMTP_ENABLE="true"
 
 # Enable connection rate limiting (DDoS protection)
