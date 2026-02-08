@@ -190,6 +190,334 @@ disable_competing_firewalls() {
 }
 
 # =============================================================================
+# Service detection and interactive configuration
+# =============================================================================
+
+# Known port-to-service name mappings
+declare -A PORT_SERVICE_NAMES=(
+    [22]="SSH"
+    [25]="SMTP"
+    [53]="DNS"
+    [80]="HTTP"
+    [443]="HTTPS"
+    [110]="POP3"
+    [143]="IMAP"
+    [465]="SMTPS"
+    [587]="Mail Submission"
+    [993]="IMAPS"
+    [995]="POP3S"
+    [3306]="MySQL"
+    [5432]="PostgreSQL"
+    [6379]="Redis"
+    [8080]="HTTP Alt"
+    [8443]="HTTPS Alt"
+    [27017]="MongoDB"
+    [9090]="Prometheus"
+    [9100]="Node Exporter"
+    [3000]="Grafana"
+    [9200]="Elasticsearch"
+    [5601]="Kibana"
+    [8888]="HTTP Proxy"
+    [2375]="Docker API"
+    [2376]="Docker TLS"
+    [6443]="Kubernetes API"
+    [10250]="Kubelet"
+    [51820]="WireGuard"
+    [1194]="OpenVPN"
+    [1723]="PPTP"
+    [21]="FTP"
+    [873]="rsync"
+    [1433]="MSSQL"
+    [5900]="VNC"
+    [3389]="RDP"
+    [11211]="Memcached"
+    [5672]="RabbitMQ"
+    [15672]="RabbitMQ Mgmt"
+    [4369]="EPMD"
+    [6660]="IRC"
+    [8081]="HTTP Alt"
+    [9092]="Kafka"
+    [2181]="ZooKeeper"
+    [8500]="Consul"
+    [4443]="HTTPS Alt"
+)
+
+# Services that are safe to expose by default
+SAFE_DEFAULT_PORTS="22 80 443 53"
+
+# Detect running services by scanning listening ports
+detect_running_services() {
+    local -n _tcp_ports=$1
+    local -n _udp_ports=$2
+    local -n _tcp_procs=$3
+    local -n _udp_procs=$4
+
+    _tcp_ports=()
+    _udp_ports=()
+    _tcp_procs=()
+    _udp_procs=()
+
+    local ss_output
+
+    # TCP listeners
+    if command -v ss &>/dev/null; then
+        ss_output=$(ss -tlnp 2>/dev/null | tail -n +2 || true)
+    elif command -v netstat &>/dev/null; then
+        ss_output=$(netstat -tlnp 2>/dev/null | tail -n +2 || true)
+    else
+        return 1
+    fi
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local port proc_name
+
+        # Extract port from Local Address column (format: *:port or 0.0.0.0:port or :::port)
+        port=$(echo "$line" | awk '{print $4}' | rev | cut -d: -f1 | rev)
+        # Extract process name
+        proc_name=$(echo "$line" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || \
+                    echo "$line" | grep -oP '(?<=\/)[^ ]+' 2>/dev/null || \
+                    echo "unknown")
+
+        # Skip non-numeric ports and duplicates
+        [[ ! "$port" =~ ^[0-9]+$ ]] && continue
+        local already=false
+        for existing in "${_tcp_ports[@]+"${_tcp_ports[@]}"}"; do
+            [[ "$existing" == "$port" ]] && already=true && break
+        done
+        [[ "$already" == "true" ]] && continue
+
+        _tcp_ports+=("$port")
+        _tcp_procs+=("$proc_name")
+    done <<< "$ss_output"
+
+    # UDP listeners
+    if command -v ss &>/dev/null; then
+        ss_output=$(ss -ulnp 2>/dev/null | tail -n +2 || true)
+    elif command -v netstat &>/dev/null; then
+        ss_output=$(netstat -ulnp 2>/dev/null | tail -n +2 || true)
+    fi
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local port proc_name
+
+        port=$(echo "$line" | awk '{print $4}' | rev | cut -d: -f1 | rev)
+        proc_name=$(echo "$line" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || \
+                    echo "$line" | grep -oP '(?<=\/)[^ ]+' 2>/dev/null || \
+                    echo "unknown")
+
+        [[ ! "$port" =~ ^[0-9]+$ ]] && continue
+        local already=false
+        for existing in "${_udp_ports[@]+"${_udp_ports[@]}"}"; do
+            [[ "$existing" == "$port" ]] && already=true && break
+        done
+        [[ "$already" == "true" ]] && continue
+
+        _udp_ports+=("$port")
+        _udp_procs+=("$proc_name")
+    done <<< "$ss_output"
+}
+
+# Get a friendly service name for a port
+get_service_name() {
+    local port="$1"
+    local proc_name="${2:-}"
+
+    if [[ -n "${PORT_SERVICE_NAMES[$port]+x}" ]]; then
+        echo "${PORT_SERVICE_NAMES[$port]}"
+    elif [[ -n "$proc_name" && "$proc_name" != "unknown" ]]; then
+        echo "$proc_name"
+    else
+        echo "Port $port"
+    fi
+}
+
+# Interactive service selection menu during install
+service_selection_menu() {
+    local config_file="$1"
+
+    log_header "Detected Running Services"
+
+    local tcp_ports=() udp_ports=() tcp_procs=() udp_procs=()
+    if ! detect_running_services tcp_ports udp_ports tcp_procs udp_procs; then
+        log_warn "Could not detect running services (ss/netstat not found)"
+        return 1
+    fi
+
+    local total=$(( ${#tcp_ports[@]} + ${#udp_ports[@]} ))
+    if [[ "$total" -eq 0 ]]; then
+        log_info "No listening services detected"
+        return 0
+    fi
+
+    # Build the menu items: index, proto, port, process, service_name, enabled
+    local -a menu_proto=() menu_port=() menu_proc=() menu_name=() menu_enabled=()
+    local idx=0
+
+    for i in "${!tcp_ports[@]}"; do
+        local port="${tcp_ports[$i]}"
+        local proc="${tcp_procs[$i]}"
+        local name
+        name=$(get_service_name "$port" "$proc")
+        menu_proto+=("TCP")
+        menu_port+=("$port")
+        menu_proc+=("$proc")
+        menu_name+=("$name")
+        # Default: enable SSH, HTTP, HTTPS; disable others
+        if [[ " $SAFE_DEFAULT_PORTS " == *" $port "* ]]; then
+            menu_enabled+=("true")
+        else
+            menu_enabled+=("false")
+        fi
+        idx=$((idx + 1))
+    done
+
+    for i in "${!udp_ports[@]}"; do
+        local port="${udp_ports[$i]}"
+        local proc="${udp_procs[$i]}"
+        local name
+        name=$(get_service_name "$port" "$proc")
+        menu_proto+=("UDP")
+        menu_port+=("$port")
+        menu_proc+=("$proc")
+        menu_name+=("$name")
+        if [[ " $SAFE_DEFAULT_PORTS " == *" $port "* ]]; then
+            menu_enabled+=("true")
+        else
+            menu_enabled+=("false")
+        fi
+        idx=$((idx + 1))
+    done
+
+    # Sort by port number (build index array sorted by port)
+    local -a sorted_indices
+    sorted_indices=($(for i in "${!menu_port[@]}"; do echo "$i ${menu_port[$i]}"; done | sort -k2 -n | awk '{print $1}'))
+
+    # Display function
+    _display_menu() {
+        echo ""
+        echo -e "  ${BOLD}${CYAN}┌────┬──────────────────────┬────────┬───────┬──────────────────┐${NC}"
+        echo -e "  ${BOLD}${CYAN}│${NC} ${BOLD} #  ${CYAN}│${NC} ${BOLD}Service              ${CYAN}│${NC} ${BOLD}Port   ${CYAN}│${NC} ${BOLD}Proto ${CYAN}│${NC} ${BOLD}Firewall         ${CYAN}│${NC}"
+        echo -e "  ${BOLD}${CYAN}├────┼──────────────────────┼────────┼───────┼──────────────────┤${NC}"
+
+        local display_num=1
+        for si in "${sorted_indices[@]}"; do
+            local name="${menu_name[$si]}"
+            local port="${menu_port[$si]}"
+            local proto="${menu_proto[$si]}"
+            local enabled="${menu_enabled[$si]}"
+            local proc="${menu_proc[$si]}"
+
+            # Truncate name to 20 chars
+            local display_name
+            if [[ ${#name} -gt 20 ]]; then
+                display_name="${name:0:17}..."
+            else
+                display_name="$name"
+            fi
+
+            # Format columns
+            local status_text
+            if [[ "$enabled" == "true" ]]; then
+                status_text="${GREEN}✓ ALLOW${NC}"
+            else
+                status_text="${RED}✗ BLOCK${NC}"
+            fi
+
+            printf "  ${CYAN}│${NC} %-2s ${CYAN}│${NC} %-20s ${CYAN}│${NC} %-6s ${CYAN}│${NC} %-5s ${CYAN}│${NC} %b          ${CYAN}│${NC}\n" \
+                "$display_num" "$display_name" "$port" "$proto" "$status_text"
+
+            display_num=$((display_num + 1))
+        done
+
+        echo -e "  ${BOLD}${CYAN}└────┴──────────────────────┴────────┴───────┴──────────────────┘${NC}"
+        echo ""
+    }
+
+    # Show menu and handle input
+    while true; do
+        _display_menu
+
+        echo -e "  ${BOLD}Toggle:${NC} enter number(s) to toggle (e.g., ${BOLD}3 5${NC})"
+        echo -e "  ${BOLD}Shortcuts:${NC} ${GREEN}a${NC}=allow all  ${RED}n${NC}=block all  ${BOLD}d${NC}=done"
+        echo ""
+        read -rp "  > " user_input
+
+        # Handle shortcuts
+        case "${user_input,,}" in
+            d|done|"")
+                break
+                ;;
+            a|all)
+                for i in "${!menu_enabled[@]}"; do
+                    menu_enabled[$i]="true"
+                done
+                continue
+                ;;
+            n|none)
+                for i in "${!menu_enabled[@]}"; do
+                    menu_enabled[$i]="false"
+                done
+                # Always keep SSH allowed
+                for i in "${!menu_port[@]}"; do
+                    if [[ "${menu_port[$i]}" == "22" ]]; then
+                        menu_enabled[$i]="true"
+                    fi
+                done
+                continue
+                ;;
+        esac
+
+        # Toggle specific numbers
+        for num in $user_input; do
+            if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#sorted_indices[@]} )); then
+                local si="${sorted_indices[$((num - 1))]}"
+                if [[ "${menu_enabled[$si]}" == "true" ]]; then
+                    menu_enabled[$si]="false"
+                else
+                    menu_enabled[$si]="true"
+                fi
+            else
+                log_warn "Invalid selection: $num"
+            fi
+        done
+    done
+
+    # Build port lists from selections
+    local selected_tcp="" selected_udp=""
+    for i in "${!menu_enabled[@]}"; do
+        if [[ "${menu_enabled[$i]}" == "true" ]]; then
+            local port="${menu_port[$i]}"
+            local proto="${menu_proto[$i]}"
+            # Don't add SSH port to TCP_PORTS (it's handled separately)
+            if [[ "$port" == "$(detect_ssh_port)" && "$proto" == "TCP" ]]; then
+                continue
+            fi
+            if [[ "$proto" == "TCP" ]]; then
+                selected_tcp="${selected_tcp:+$selected_tcp }$port"
+            else
+                selected_udp="${selected_udp:+$selected_udp }$port"
+            fi
+        fi
+    done
+
+    # Apply to config
+    sed -i "s/^TCP_PORTS=.*/TCP_PORTS=\"${selected_tcp}\"/" "$config_file"
+    sed -i "s/^UDP_PORTS=.*/UDP_PORTS=\"${selected_udp}\"/" "$config_file"
+
+    echo ""
+    log_success "Firewall configured based on service selection"
+    if [[ -n "$selected_tcp" ]]; then
+        log_info "TCP ports: ${BOLD}${selected_tcp}${NC}"
+    fi
+    if [[ -n "$selected_udp" ]]; then
+        log_info "UDP ports: ${BOLD}${selected_udp}${NC}"
+    fi
+    log_info "SSH is always allowed (managed separately)"
+}
+
+# =============================================================================
 # Install dependencies
 # =============================================================================
 
@@ -563,21 +891,38 @@ main() {
 
     # Step 5: Setup configuration
     if [[ ! -f "${CONFIG_DIR}/firewall.conf" ]]; then
+        # Always start with the example config as base
+        cp "${CONFIG_DIR}/firewall.conf.example" "${CONFIG_DIR}/firewall.conf"
+
         if [[ "$NON_INTERACTIVE" == "true" ]]; then
-            # Non-interactive: use example config with sensible defaults
-            cp "${CONFIG_DIR}/firewall.conf.example" "${CONFIG_DIR}/firewall.conf"
             log_info "Default configuration installed"
         else
-            # Interactive setup wizard
+            # Detect running services and offer interactive selection
+            service_selection_menu "${CONFIG_DIR}/firewall.conf" || true
+
+            # Offer SSH restriction
+            local ssh_port
+            ssh_port=$(detect_ssh_port)
             echo ""
-            read -rp "Run interactive setup wizard? [Y/n]: " run_wizard
-            if [[ "${run_wizard,,}" != "n" ]]; then
-                "$SBIN_LINK" setup
-            else
-                cp "${CONFIG_DIR}/firewall.conf.example" "${CONFIG_DIR}/firewall.conf"
-                log_info "Default configuration installed"
-                log_info "Edit config: nano ${CONFIG_DIR}/firewall.conf"
+            read -rp "  Restrict SSH ($ssh_port) to specific IPs? [y/N]: " restrict_ssh
+            if [[ "${restrict_ssh,,}" == "y" ]]; then
+                read -rp "  Enter allowed SSH IPs (space-separated): " ssh_ips
+                if [[ -n "$ssh_ips" ]]; then
+                    sed -i "s/^SSH_ALLOWED_IPS=.*/SSH_ALLOWED_IPS=\"${ssh_ips}\"/" "${CONFIG_DIR}/firewall.conf"
+                    log_success "SSH restricted to: $ssh_ips"
+                fi
             fi
+
+            # Allow ping?
+            echo ""
+            read -rp "  Allow ping (ICMP)? [Y/n]: " allow_ping
+            if [[ "${allow_ping,,}" == "n" ]]; then
+                sed -i "s/^ICMP_ENABLE=.*/ICMP_ENABLE=\"false\"/" "${CONFIG_DIR}/firewall.conf"
+            fi
+
+            echo ""
+            log_success "Configuration saved: ${CONFIG_DIR}/firewall.conf"
+            log_info "Edit anytime: nano ${CONFIG_DIR}/firewall.conf"
         fi
     else
         log_info "Existing configuration preserved: ${CONFIG_DIR}/firewall.conf"

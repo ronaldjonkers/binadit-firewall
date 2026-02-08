@@ -329,6 +329,12 @@ test_install_script() {
     assert_contains "Installer detects existing install" "$installer" "detect_existing_install"
     assert_contains "Installer supports OpenRC"          "$installer" "rc-service"
     assert_contains "Installer supports upgrade"         "$installer" "Upgrade"
+
+    # v2.1.3 service detection
+    assert_contains "Installer has service detection"      "$installer" "detect_running_services"
+    assert_contains "Installer has service selection menu" "$installer" "service_selection_menu"
+    assert_contains "Installer has port-service mapping"   "$installer" "PORT_SERVICE_NAMES"
+    assert_contains "Installer has get_service_name"       "$installer" "get_service_name"
 }
 
 # =============================================================================
