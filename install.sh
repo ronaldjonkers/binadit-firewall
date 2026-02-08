@@ -527,6 +527,11 @@ main() {
         esac
     done
 
+    # Auto-detect piped input (e.g., curl | bash) and force non-interactive mode
+    if [[ ! -t 0 ]]; then
+        NON_INTERACTIVE="true"
+    fi
+
     if [[ "$action" == "uninstall" ]]; then
         uninstall
         exit 0
@@ -593,11 +598,11 @@ main() {
     echo ""
     echo -e "${GREEN}${BOLD}"
     cat <<'COMPLETE'
-    ╔══════════════════════════════════════════════════════════════╗
-    ║                                                            ║
-    ║        ✅  INSTALLATION COMPLETE                           ║
-    ║                                                            ║
-    ╚══════════════════════════════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                                                                       ║
+    ║              ✅  INSTALLATION COMPLETE                                ║
+    ║                                                                       ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
 COMPLETE
     echo -e "${NC}"
     # Offer MOTD login banner
