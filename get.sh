@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall — Single-line installer bootstrap
+# binadit-firewall — Single-line installer / uninstaller bootstrap
 # =============================================================================
-# Usage:
+# Install:
 #   curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
 #   wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
+#
+# Uninstall:
+#   curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --uninstall
+#   wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --uninstall
 #
 # This script downloads the latest binadit-firewall release and runs install.sh.
 # It cleans up after itself — no leftover files.
@@ -27,9 +31,17 @@ info()  { echo -e "  ${CYAN}▸${NC} $*"; }
 ok()    { echo -e "  ${GREEN}✓${NC} $*"; }
 fail()  { echo -e "  ${RED}✗${NC} $*"; exit 1; }
 
+# Detect mode (install vs uninstall)
+ACTION="install"
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall|uninstall) ACTION="uninstall" ;;
+    esac
+done
+
 # Must be root
 if [[ $EUID -ne 0 ]]; then
-    fail "This installer must be run as root. Use: curl -sL ... | ${BOLD}sudo${NC} bash"
+    fail "This script must be run as root. Use: curl -sL ... | ${BOLD}sudo${NC} bash"
 fi
 
 # Need curl or wget
@@ -48,8 +60,13 @@ command -v git &>/dev/null && HAS_GIT=true
 command -v tar &>/dev/null && HAS_TAR=true
 
 echo ""
-echo -e "  ${BOLD}${CYAN}binadit-firewall${NC} — Quick Installer"
-echo -e "  ${CYAN}─────────────────────────────────────${NC}"
+if [[ "$ACTION" == "uninstall" ]]; then
+    echo -e "  ${BOLD}${RED}binadit-firewall${NC} — Uninstaller"
+    echo -e "  ${RED}─────────────────────────────────${NC}"
+else
+    echo -e "  ${BOLD}${CYAN}binadit-firewall${NC} — Quick Installer"
+    echo -e "  ${CYAN}─────────────────────────────────────${NC}"
+fi
 echo ""
 
 # Create temp directory
@@ -70,11 +87,15 @@ else
     fail "git or tar is required to download the installer."
 fi
 
-# Run the installer
-info "Starting installer..."
+# Run the installer / uninstaller
+if [[ "$ACTION" == "uninstall" ]]; then
+    info "Starting uninstaller..."
+else
+    info "Starting installer..."
+fi
 echo ""
 
 cd "$INSTALL_TMP/binadit-firewall"
 
-# Pass through any arguments (e.g., --non-interactive)
+# Pass through any arguments (e.g., --non-interactive, --uninstall)
 bash install.sh "$@"

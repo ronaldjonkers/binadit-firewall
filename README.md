@@ -79,9 +79,26 @@ sudo bash install.sh
 
 ### Uninstall
 
+**One-line remote uninstall** (no local files needed):
+
+```bash
+curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --uninstall
+```
+
+Or with `wget`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --uninstall
+```
+
+Or locally if the repo is cloned:
+
 ```bash
 sudo bash install.sh --uninstall
 ```
+
+> **Note:** Uninstall removes the firewall binary, systemd service, and flushes all rules.
+> Your configuration in `/etc/binadit-firewall/` is **preserved**. To fully remove it: `sudo rm -rf /etc/binadit-firewall`
 
 ## Usage
 
