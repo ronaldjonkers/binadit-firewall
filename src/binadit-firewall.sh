@@ -48,10 +48,7 @@ validate_config() {
 
 # Detect and use the appropriate backend
 get_backend() {
-    local backend
-    backend=$(detect_backend)
-    log_info "Using firewall backend: ${BOLD}${backend}${NC}"
-    echo "$backend"
+    detect_backend
 }
 
 # Run configtest standalone
@@ -74,6 +71,7 @@ fw_start() {
 
     local backend
     backend=$(get_backend)
+    log_info "Using firewall backend: ${BOLD}${backend}${NC}"
 
     # Backup current rules before making changes
     backup_rules

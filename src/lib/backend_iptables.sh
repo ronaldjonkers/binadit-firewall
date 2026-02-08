@@ -117,7 +117,7 @@ ipt_apply() {
     # NTP
     $ipt -A OUTPUT -p udp --dport 123 -j ACCEPT
 
-    # SSH access restrictions
+    # SSH access — ALWAYS ensure SSH is reachable to prevent lockout
     if [[ -n "${SSH_ALLOWED_IPS:-}" ]]; then
         for ip in $SSH_ALLOWED_IPS; do
             local resolved
@@ -125,6 +125,9 @@ ipt_apply() {
             $ipt -A INPUT -p tcp --dport "$ssh_port" -s "$resolved" -j ACCEPT
             $ipt -A OUTPUT -p tcp --sport "$ssh_port" -d "$resolved" -j ACCEPT
         done
+    elif [[ -z "${TCP_PORTS:-}" ]] || [[ " ${TCP_PORTS} " != *" ${ssh_port} "* ]]; then
+        # SSH port not in TCP_PORTS and no restriction — open SSH to all
+        $ipt -A INPUT -p tcp --dport "$ssh_port" -j ACCEPT
     fi
 
     # Port-specific IP restrictions

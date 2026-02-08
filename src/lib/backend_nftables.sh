@@ -34,9 +34,7 @@ nft_apply() {
     ruleset+="# Do not edit manually - managed by binadit-firewall\n"
     ruleset+="\n"
 
-    # Delete existing table if present
-    ruleset+="delete table inet ${NFT_TABLE_NAME} 2>/dev/null || true\n"
-    ruleset+="\n"
+    # Table will be deleted before applying (handled in shell, not in nft file)
 
     # Create table
     ruleset+="table inet ${NFT_TABLE_NAME} {\n"
@@ -157,14 +155,18 @@ nft_apply() {
 
     ruleset+="\n"
 
-    # SSH access restrictions
+    # SSH access — ALWAYS ensure SSH is reachable to prevent lockout
     if [[ -n "${SSH_ALLOWED_IPS:-}" ]]; then
-        ruleset+="        # SSH access (restricted)\n"
+        ruleset+="        # SSH access (restricted to specific IPs)\n"
         for ip in $SSH_ALLOWED_IPS; do
             local resolved
             resolved=$(resolve_hostname "$ip" 2>/dev/null) || continue
             ruleset+="        ip saddr ${resolved} tcp dport ${ssh_port} accept\n"
         done
+    elif [[ -z "${TCP_PORTS:-}" ]] || [[ " ${TCP_PORTS} " != *" ${ssh_port} "* ]]; then
+        # SSH port not in TCP_PORTS and no restriction — open SSH to all
+        ruleset+="        # SSH access (open — not in TCP_PORTS)\n"
+        ruleset+="        tcp dport ${ssh_port} accept\n"
     fi
     if [[ -n "${SSH_ALLOWED_IPS_IPV6:-}" ]]; then
         for ip in $SSH_ALLOWED_IPS_IPV6; do
@@ -259,7 +261,9 @@ nft_apply() {
 
     # Rate limiting (DDoS protection)
     if [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]]; then
-        local rate="${RATE_LIMIT_RATE:-25/second}"
+        local rate="${RATE_LIMIT_RATE:-25}"
+        # Ensure rate has a unit (nft requires e.g. "25/second")
+        [[ "$rate" =~ / ]] || rate="${rate}/second"
         local burst="${RATE_LIMIT_BURST:-100}"
         ruleset+="\n        # Rate limiting for new connections\n"
         ruleset+="        ct state new limit rate ${rate} burst ${burst} packets accept\n"
@@ -425,14 +429,20 @@ nft_apply() {
     # We need to handle the delete separately since it may fail if table doesn't exist
     nft delete table inet "$NFT_TABLE_NAME" 2>/dev/null || true
 
-    # Apply the ruleset (skip the delete line and shebang)
+    # Apply the ruleset (skip comments and empty lines for nft)
     local apply_file
     apply_file=$(mktemp)
-    grep -v "^delete table" "$rules_file" | grep -v "^#!" > "$apply_file" || true
-    if nft -f "$apply_file" 2>/dev/null; then
+    grep -v "^#" "$rules_file" | grep -v "^$" > "$apply_file" || true
+
+    local nft_output
+    if nft_output=$(nft -f "$apply_file" 2>&1); then
         log_success "nftables rules applied successfully"
     else
-        log_error "Failed to apply nftables rules. Check $rules_file for syntax errors."
+        log_error "Failed to apply nftables rules:"
+        echo "$nft_output" | while IFS= read -r line; do
+            log_error "  $line"
+        done
+        log_info "Ruleset saved to: $rules_file"
         rm -f "$apply_file"
         return 1
     fi
