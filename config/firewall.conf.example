@@ -30,14 +30,24 @@ TCP_PORTS_OUTPUT=""
 UDP_PORTS=""
 
 # -----------------------------------------------------------------------------
-# BLOCKED PORTS
+# BLOCKED PORTS (both directions)
 # -----------------------------------------------------------------------------
-# TCP ports to explicitly block (overrides other rules)
+# TCP ports to explicitly block inbound AND outbound (overrides other rules)
 # Example: "23 135 139 445"
 BLOCKED_TCP_PORTS=""
 
-# UDP ports to explicitly block
+# UDP ports to explicitly block inbound AND outbound
 BLOCKED_UDP_PORTS=""
+
+# -----------------------------------------------------------------------------
+# BLOCKED OUTGOING PORTS (output only)
+# -----------------------------------------------------------------------------
+# TCP ports to block outgoing only (e.g. block outgoing email)
+# Example: "25 587" to block outgoing SMTP
+BLOCKED_TCP_PORTS_OUTPUT=""
+
+# UDP ports to block outgoing only
+BLOCKED_UDP_PORTS_OUTPUT=""
 
 # -----------------------------------------------------------------------------
 # SSH ACCESS

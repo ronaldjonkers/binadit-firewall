@@ -536,6 +536,16 @@ test_security_features() {
 
     # v2.2.0: MOTD sanitized output
     assert_contains "Main script: MOTD head sanitization"  "${SRC_DIR}/binadit-firewall.sh" "head -1"
+
+    # v2.2.0: outgoing port blocking
+    assert_contains "Main script: BLOCKED_TCP_PORTS_OUTPUT" "${SRC_DIR}/binadit-firewall.sh" "BLOCKED_TCP_PORTS_OUTPUT"
+    assert_contains "Main script: BLOCKED_UDP_PORTS_OUTPUT" "${SRC_DIR}/binadit-firewall.sh" "BLOCKED_UDP_PORTS_OUTPUT"
+    assert_contains "nftables: outgoing TCP block"          "${LIB_DIR}/backend_nftables.sh" "BLOCKED_TCP_PORTS_OUTPUT"
+    assert_contains "nftables: outgoing UDP block"          "${LIB_DIR}/backend_nftables.sh" "BLOCKED_UDP_PORTS_OUTPUT"
+    assert_contains "iptables: outgoing TCP block"          "${LIB_DIR}/backend_iptables.sh" "BLOCKED_TCP_PORTS_OUTPUT"
+    assert_contains "iptables: outgoing UDP block"          "${LIB_DIR}/backend_iptables.sh" "BLOCKED_UDP_PORTS_OUTPUT"
+    assert_contains "Config: outgoing TCP block"            "${CONFIG_DIR}/firewall.conf.example" "BLOCKED_TCP_PORTS_OUTPUT"
+    assert_contains "Config: outgoing UDP block"            "${CONFIG_DIR}/firewall.conf.example" "BLOCKED_UDP_PORTS_OUTPUT"
 }
 
 # =============================================================================

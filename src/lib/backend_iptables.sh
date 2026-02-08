@@ -96,7 +96,7 @@ ipt_apply() {
         done
     fi
 
-    # Blocked ports
+    # Blocked ports (both directions)
     if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
         for port in $BLOCKED_TCP_PORTS; do
             $ipt -A INPUT -p tcp --dport "$port" -j DROP
@@ -106,6 +106,18 @@ ipt_apply() {
     if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
         for port in $BLOCKED_UDP_PORTS; do
             $ipt -A INPUT -p udp --dport "$port" -j DROP
+            $ipt -A OUTPUT -p udp --dport "$port" -j DROP
+        done
+    fi
+
+    # Blocked outgoing ports only (e.g. block outgoing SMTP)
+    if [[ -n "${BLOCKED_TCP_PORTS_OUTPUT:-}" ]]; then
+        for port in $BLOCKED_TCP_PORTS_OUTPUT; do
+            $ipt -A OUTPUT -p tcp --dport "$port" -j DROP
+        done
+    fi
+    if [[ -n "${BLOCKED_UDP_PORTS_OUTPUT:-}" ]]; then
+        for port in $BLOCKED_UDP_PORTS_OUTPUT; do
             $ipt -A OUTPUT -p udp --dport "$port" -j DROP
         done
     fi

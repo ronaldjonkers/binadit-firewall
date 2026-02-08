@@ -287,6 +287,33 @@ nft_apply() {
     ruleset+="        # Connection tracking\n"
     ruleset+="        ct state established,related accept\n"
     ruleset+="\n"
+
+    # Blocked ports (output) — must come before accept rules
+    if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
+        for port in $BLOCKED_TCP_PORTS; do
+            ruleset+="        tcp dport ${port} drop\n"
+        done
+    fi
+    if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
+        for port in $BLOCKED_UDP_PORTS; do
+            ruleset+="        udp dport ${port} drop\n"
+        done
+    fi
+    # Output-only blocked ports (e.g. block outgoing SMTP)
+    if [[ -n "${BLOCKED_TCP_PORTS_OUTPUT:-}" ]]; then
+        ruleset+="\n        # Blocked outgoing TCP ports\n"
+        for port in $BLOCKED_TCP_PORTS_OUTPUT; do
+            ruleset+="        tcp dport ${port} drop\n"
+        done
+    fi
+    if [[ -n "${BLOCKED_UDP_PORTS_OUTPUT:-}" ]]; then
+        ruleset+="\n        # Blocked outgoing UDP ports\n"
+        for port in $BLOCKED_UDP_PORTS_OUTPUT; do
+            ruleset+="        udp dport ${port} drop\n"
+        done
+    fi
+
+    ruleset+="\n"
     ruleset+="        # DNS\n"
     ruleset+="        tcp dport 53 accept\n"
     ruleset+="        udp dport 53 accept\n"

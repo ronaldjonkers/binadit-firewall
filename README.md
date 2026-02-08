@@ -233,8 +233,11 @@ TCP_PORTS="80 443 8080"
 # Open UDP ports
 UDP_PORTS="51820"
 
-# Block specific ports
+# Block specific ports (both directions)
 BLOCKED_TCP_PORTS="23 135 139 445"
+
+# Block outgoing ports only (e.g. prevent server from sending email)
+BLOCKED_TCP_PORTS_OUTPUT="25 587"
 
 # Restrict SSH to specific IPs
 SSH_ALLOWED_IPS="1.2.3.4 office.example.com 10.0.0.0/24"

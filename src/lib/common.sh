@@ -135,6 +135,12 @@ print_rule_summary() {
     if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
         echo -e "  ${CYAN}│${NC}  ${RED}UDP blocked:${NC}     $BLOCKED_UDP_PORTS"
     fi
+    if [[ -n "${BLOCKED_TCP_PORTS_OUTPUT:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}TCP out block:${NC}   $BLOCKED_TCP_PORTS_OUTPUT"
+    fi
+    if [[ -n "${BLOCKED_UDP_PORTS_OUTPUT:-}" ]]; then
+        echo -e "  ${CYAN}│${NC}  ${RED}UDP out block:${NC}   $BLOCKED_UDP_PORTS_OUTPUT"
+    fi
 
     echo -e "  ${CYAN}├─────────────────────────────────────────────────────┤${NC}"
 
@@ -286,6 +292,8 @@ configtest() {
     _ct_check_ports "UDP_PORTS"        "${UDP_PORTS:-}"
     _ct_check_ports "BLOCKED_TCP_PORTS" "${BLOCKED_TCP_PORTS:-}"
     _ct_check_ports "BLOCKED_UDP_PORTS" "${BLOCKED_UDP_PORTS:-}"
+    _ct_check_ports "BLOCKED_TCP_PORTS_OUTPUT" "${BLOCKED_TCP_PORTS_OUTPUT:-}"
+    _ct_check_ports "BLOCKED_UDP_PORTS_OUTPUT" "${BLOCKED_UDP_PORTS_OUTPUT:-}"
 
     # --- Host/IP validation ---
     _ct_check_hosts "SSH_ALLOWED_IPS"  "${SSH_ALLOWED_IPS:-}"
