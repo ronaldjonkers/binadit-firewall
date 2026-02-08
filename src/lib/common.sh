@@ -14,7 +14,7 @@ set -euo pipefail
 # Guard against re-sourcing (readonly can only be set once)
 if [[ -z "${_BINADIT_COMMON_LOADED:-}" ]]; then
     readonly _BINADIT_COMMON_LOADED=1
-    readonly BINADIT_VERSION="3.0.0"
+    readonly BINADIT_VERSION="3.0.1"
     readonly RED=$'\033[0;31m'
     readonly GREEN=$'\033[0;32m'
     readonly YELLOW=$'\033[1;33m'
