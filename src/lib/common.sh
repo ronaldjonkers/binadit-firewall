@@ -2,6 +2,9 @@
 # =============================================================================
 # binadit-firewall - Common utility functions
 # =============================================================================
+# Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
+# License: GPL-2.0
+#
 # Shared functions used across all binadit-firewall components.
 # This file is sourced by other scripts and should not be executed directly.
 # =============================================================================
@@ -54,6 +57,8 @@ BANNER
     local left_pad=$((total_pad / 2))
     local right_pad=$((total_pad - left_pad))
     printf "    ║%*s%s%*s║\n" "$left_pad" "" "$ver_text" "$right_pad" ""
+    echo    "    ║                                                                           ║"
+    echo    "    ║              © Ronald Jonkers — Binadit BV — binadit.com                  ║"
     echo    "    ║                                                                           ║"
     echo    "    ╚═══════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"

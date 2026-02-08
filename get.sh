@@ -2,6 +2,9 @@
 # =============================================================================
 # binadit-firewall — Single-line installer / uninstaller bootstrap
 # =============================================================================
+# Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
+# License: GPL-2.0
+#
 # Install:
 #   curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
 #   wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
@@ -98,4 +101,9 @@ echo ""
 cd "$INSTALL_TMP/binadit-firewall"
 
 # Pass through any arguments (e.g., --non-interactive, --uninstall)
-bash install.sh "$@"
+# Redirect /dev/tty as stdin so interactive prompts work even when piped (curl | bash)
+if [[ -t 1 ]] && [[ -e /dev/tty ]]; then
+    bash install.sh "$@" < /dev/tty
+else
+    bash install.sh "$@"
+fi

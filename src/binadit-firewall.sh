@@ -5,7 +5,7 @@
 # A modern, easy-to-use Linux firewall manager with support for both
 # nftables and iptables backends.
 #
-# Copyright (C) 2013-2026 Ronald Jonkers - binadit
+# Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
 # License: GPL-2.0
 #
 # Usage: binadit-firewall {start|stop|restart|status|reload|config|configtest|setup|features|update|auto-update|upgrade|backup|motd-on|motd-off|version|help}

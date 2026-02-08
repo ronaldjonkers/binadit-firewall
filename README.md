@@ -375,10 +375,13 @@ GPL-2.0 — See [LICENSE](LICENSE) for details.
 
 ## Author
 
-Ronald Jonkers — [binadit](https://binadit.com)
+**Ronald Jonkers** — [Binadit BV](https://binadit.com)
+
+Copyright © 2013-2026 Ronald Jonkers — Binadit BV. All rights reserved.
 
 Originally created in 2013, completely rewritten in 2026 for modern Linux.
 
 ---
 
 *binadit-firewall — making firewall management easy since 2013* 🛡️
+*A product of [Binadit BV](https://binadit.com)*

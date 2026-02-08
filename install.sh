@@ -2,6 +2,9 @@
 # =============================================================================
 # binadit-firewall v2.1.2 - Installer
 # =============================================================================
+# Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
+# License: GPL-2.0
+#
 # Universal installer for Linux systems.
 # Supports: Debian/Ubuntu, CentOS/RHEL/Rocky/Alma, Fedora, Arch, Alpine, SUSE
 #
@@ -855,8 +858,10 @@ main() {
         esac
     done
 
-    # Auto-detect piped input (e.g., curl | bash) and force non-interactive mode
-    if [[ ! -t 0 ]]; then
+    # Auto-detect non-interactive mode
+    # When piped via get.sh, stdin is redirected from /dev/tty so -t 0 will be true.
+    # Only force non-interactive if there is truly no terminal available.
+    if [[ ! -t 0 ]] && [[ ! -e /dev/tty ]]; then
         NON_INTERACTIVE="true"
     fi
 
@@ -890,42 +895,53 @@ main() {
     install_files
 
     # Step 5: Setup configuration
+    local run_service_detection=false
+
     if [[ ! -f "${CONFIG_DIR}/firewall.conf" ]]; then
-        # Always start with the example config as base
+        # Fresh install: start with example config
         cp "${CONFIG_DIR}/firewall.conf.example" "${CONFIG_DIR}/firewall.conf"
-
-        if [[ "$NON_INTERACTIVE" == "true" ]]; then
-            log_info "Default configuration installed"
-        else
-            # Detect running services and offer interactive selection
-            service_selection_menu "${CONFIG_DIR}/firewall.conf" || true
-
-            # Offer SSH restriction
-            local ssh_port
-            ssh_port=$(detect_ssh_port)
-            echo ""
-            read -rp "  Restrict SSH ($ssh_port) to specific IPs? [y/N]: " restrict_ssh
-            if [[ "${restrict_ssh,,}" == "y" ]]; then
-                read -rp "  Enter allowed SSH IPs (space-separated): " ssh_ips
-                if [[ -n "$ssh_ips" ]]; then
-                    sed -i "s/^SSH_ALLOWED_IPS=.*/SSH_ALLOWED_IPS=\"${ssh_ips}\"/" "${CONFIG_DIR}/firewall.conf"
-                    log_success "SSH restricted to: $ssh_ips"
-                fi
-            fi
-
-            # Allow ping?
-            echo ""
-            read -rp "  Allow ping (ICMP)? [Y/n]: " allow_ping
-            if [[ "${allow_ping,,}" == "n" ]]; then
-                sed -i "s/^ICMP_ENABLE=.*/ICMP_ENABLE=\"false\"/" "${CONFIG_DIR}/firewall.conf"
-            fi
-
-            echo ""
-            log_success "Configuration saved: ${CONFIG_DIR}/firewall.conf"
-            log_info "Edit anytime: nano ${CONFIG_DIR}/firewall.conf"
-        fi
+        log_info "Default configuration installed"
+        run_service_detection=true
     else
-        log_info "Existing configuration preserved: ${CONFIG_DIR}/firewall.conf"
+        # Re-install: offer to reconfigure
+        log_info "Existing configuration found: ${CONFIG_DIR}/firewall.conf"
+        if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            echo ""
+            read -rp "  Configure firewall ports based on detected services? [Y/n]: " reconfig
+            if [[ "${reconfig,,}" != "n" ]]; then
+                run_service_detection=true
+            fi
+        fi
+    fi
+
+    if [[ "$run_service_detection" == "true" && "$NON_INTERACTIVE" != "true" ]]; then
+        # Detect running services and offer interactive selection
+        service_selection_menu "${CONFIG_DIR}/firewall.conf" || true
+
+        # Offer SSH restriction
+        local ssh_port
+        ssh_port=$(detect_ssh_port)
+        echo ""
+        read -rp "  Restrict SSH ($ssh_port) to specific IPs? [y/N]: " restrict_ssh
+        if [[ "${restrict_ssh,,}" == "y" ]]; then
+            read -rp "  Enter allowed SSH IPs (space-separated): " ssh_ips
+            if [[ -n "$ssh_ips" ]]; then
+                sed -i "s/^SSH_ALLOWED_IPS=.*/SSH_ALLOWED_IPS=\"${ssh_ips}\"/" "${CONFIG_DIR}/firewall.conf"
+                log_success "SSH restricted to: $ssh_ips"
+            fi
+        fi
+
+        # Allow ping?
+        echo ""
+        read -rp "  Allow ping (ICMP)? [Y/n]: " allow_ping
+        if [[ "${allow_ping,,}" == "n" ]]; then
+            sed -i "s/^ICMP_ENABLE=.*/ICMP_ENABLE=\"false\"/" "${CONFIG_DIR}/firewall.conf"
+        fi
+
+        echo ""
+        log_success "Configuration saved: ${CONFIG_DIR}/firewall.conf"
+        log_info "Edit anytime: nano ${CONFIG_DIR}/firewall.conf"
+        log_info "Or use: binadit-firewall config show"
     fi
 
     # Step 6: Start firewall
