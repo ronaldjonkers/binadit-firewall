@@ -828,13 +828,40 @@ uninstall() {
     # Flush rules
     "${SBIN_LINK}" stop 2>/dev/null || true
 
-    # Remove files
+    # Remove MOTD login status indicator
+    rm -f /etc/profile.d/binadit-firewall-status.sh
+    log_info "Removed login status indicator"
+
+    # Remove prompt indicator (🟢/🔴)
+    rm -f /etc/profile.d/binadit-firewall-prompt.sh
+    log_info "Removed prompt indicator"
+
+    # Remove auto-update cron job
+    rm -f /etc/cron.weekly/binadit-firewall-update
+    log_info "Removed auto-update cron job"
+
+    # Remove program files
     rm -f "$SBIN_LINK"
     rm -rf "$INSTALL_DIR"
 
     log_success "binadit-firewall uninstalled"
-    log_info "Configuration preserved in: $CONFIG_DIR"
-    log_info "To remove config: rm -rf $CONFIG_DIR"
+
+    # Ask about config removal
+    if [[ -d "$CONFIG_DIR" ]]; then
+        if [[ "$NON_INTERACTIVE" == "true" ]]; then
+            log_info "Configuration preserved in: $CONFIG_DIR"
+            log_info "To remove config: rm -rf $CONFIG_DIR"
+        else
+            echo ""
+            read -rp "  Remove configuration ($CONFIG_DIR)? [y/N]: " remove_config
+            if [[ "${remove_config,,}" == "y" ]]; then
+                rm -rf "$CONFIG_DIR"
+                log_success "Configuration removed"
+            else
+                log_info "Configuration preserved in: $CONFIG_DIR"
+            fi
+        fi
+    fi
 }
 
 # =============================================================================
