@@ -980,6 +980,11 @@ fw_update() {
     log_success "Updated to v${remote_version}"
     log_info "Configuration preserved: ${CONFIG_FILE}"
     log_info "Run ${BOLD}binadit-firewall restart${NC} to apply with the new version"
+
+    # Exit immediately — the script file was just replaced while running.
+    # If we let bash continue reading, the file offset is wrong and causes
+    # a syntax error in the new (differently-sized) file.
+    exit 0
 }
 
 # =============================================================================

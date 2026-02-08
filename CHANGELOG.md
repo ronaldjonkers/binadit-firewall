@@ -5,6 +5,11 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.3] - 2026-02-08
+
+### Fixed
+- **Self-update syntax error**: `binadit-firewall update` now exits immediately after replacing its own script file. Previously, bash would continue reading the replaced file at the wrong byte offset, causing a syntax error.
+
 ## [3.0.2] - 2026-02-08
 
 ### Fixed
