@@ -16,11 +16,11 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 
 # Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BOLD=$'\033[1m'
+NC=$'\033[0m'
 
 # Determine paths
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

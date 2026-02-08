@@ -966,21 +966,51 @@ main() {
     ╚═══════════════════════════════════════════════════════════════════════════╝
 COMPLETE
     echo -e "${NC}"
-    # Offer MOTD login banner
-    if [[ "$NON_INTERACTIVE" != "true" ]]; then
-        echo ""
-        read -rp "  Show firewall status on every login (motd)? [Y/n]: " install_motd
-        if [[ "${install_motd,,}" != "n" ]]; then
-            "$SBIN_LINK" motd-on
-        fi
-    fi
-
     # Offer weekly auto-updates
     if [[ "$NON_INTERACTIVE" != "true" ]]; then
         echo ""
         read -rp "  Enable weekly automatic updates? [Y/n]: " enable_autoupdate
         if [[ "${enable_autoupdate,,}" != "n" ]]; then
-            "$SBIN_LINK" auto-update on
+            # Write cron script directly (don't rely on freshly installed binary)
+            local cron_script="/etc/cron.weekly/binadit-firewall-update"
+            if [[ -d /etc/cron.weekly ]]; then
+                cat > "$cron_script" <<'CRONEOF'
+#!/bin/bash
+# binadit-firewall weekly auto-update
+# Installed by: binadit-firewall installer
+# Remove with:  binadit-firewall auto-update off
+
+LOG="/var/log/binadit-firewall-update.log"
+
+{
+    echo "=== binadit-firewall auto-update: $(date) ==="
+    /usr/local/sbin/binadit-firewall update --yes 2>&1
+    echo "=== Update completed: $(date) ==="
+    echo ""
+} >> "$LOG" 2>&1
+
+# Keep log file reasonable (last 500 lines)
+if [ -f "$LOG" ]; then
+    tail -500 "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
+fi
+CRONEOF
+                chmod 755 "$cron_script"
+                log_success "Weekly auto-update enabled"
+                log_info "Cron script: ${cron_script}"
+                log_info "Disable with: ${BOLD}binadit-firewall auto-update off${NC}"
+            else
+                # No /etc/cron.weekly — try via binadit-firewall command
+                "$SBIN_LINK" auto-update on 2>/dev/null || log_warn "Could not enable auto-update (no /etc/cron.weekly/)"
+            fi
+        fi
+    fi
+
+    # Offer MOTD login banner
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        echo ""
+        read -rp "  Show firewall status on every login (motd)? [Y/n]: " install_motd
+        if [[ "${install_motd,,}" != "n" ]]; then
+            "$SBIN_LINK" motd-on 2>/dev/null || log_warn "Could not install MOTD script"
         fi
     fi
 
