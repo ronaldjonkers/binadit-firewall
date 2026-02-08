@@ -242,7 +242,7 @@ nft_apply() {
     # SYN flood protection
     if [[ "${SYN_FLOOD_PROTECT:-true}" == "true" ]]; then
         ruleset+="\n        # SYN flood protection\n"
-        ruleset+="        tcp flags syn limit rate 1/second burst 3 accept\n"
+        ruleset+="        tcp flags syn limit rate 1/second burst 3 packets accept\n"
     fi
 
     # Connection limit per IP
