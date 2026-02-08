@@ -569,7 +569,8 @@ fw_features() {
   ${BOLD}NETWORK FEATURES${NC}
   ${GREEN}ICMP_ENABLE${NC}             Allow ping. Default: true.
   ${GREEN}MULTICAST_ENABLE${NC}        For clusters/load balancers. Default: false.
-  ${GREEN}SMTP_ENABLE${NC}             Allow outgoing mail (25, 587). Default: true.
+  ${GREEN}SMTP_ENABLE${NC}             Deprecated — outgoing is open by default.
+                          To block outgoing mail, use BLOCKED_TCP_PORTS_OUTPUT="25 587".
   ${GREEN}NAT_ENABLE${NC}              Enable NAT routing (gateway setups). Default: false.
   ${GREEN}NAT_EXTERNAL_IFACE${NC}      Internet-facing interface (e.g., eth0).
   ${GREEN}NAT_INTERNAL_IFACE${NC}      LAN-facing interface (e.g., eth1).

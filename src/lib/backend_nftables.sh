@@ -283,28 +283,23 @@ nft_apply() {
     ruleset+="    }\n\n"
 
     # --- OUTPUT chain ---
+    # Default: allow all outgoing — firewall primarily protects inbound
     ruleset+="    chain output {\n"
-    ruleset+="        type filter hook output priority 0; policy drop;\n"
-    ruleset+="\n"
-    ruleset+="        # Loopback\n"
-    ruleset+="        oif lo accept\n"
-    ruleset+="\n"
-    ruleset+="        # Connection tracking\n"
-    ruleset+="        ct state established,related accept\n"
-    ruleset+="\n"
+    ruleset+="        type filter hook output priority 0; policy accept;\n"
 
-    # Blocked ports (output) — must come before accept rules
+    # Blocked ports (output)
     if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
+        ruleset+="\n        # Blocked TCP ports (both directions)\n"
         for port in $BLOCKED_TCP_PORTS; do
             ruleset+="        tcp dport ${port} drop\n"
         done
     fi
     if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
+        ruleset+="\n        # Blocked UDP ports (both directions)\n"
         for port in $BLOCKED_UDP_PORTS; do
             ruleset+="        udp dport ${port} drop\n"
         done
     fi
-    # Output-only blocked ports (e.g. block outgoing SMTP)
     if [[ -n "${BLOCKED_TCP_PORTS_OUTPUT:-}" ]]; then
         ruleset+="\n        # Blocked outgoing TCP ports\n"
         for port in $BLOCKED_TCP_PORTS_OUTPUT; do
@@ -316,91 +311,6 @@ nft_apply() {
         for port in $BLOCKED_UDP_PORTS_OUTPUT; do
             ruleset+="        udp dport ${port} drop\n"
         done
-    fi
-
-    ruleset+="\n"
-    ruleset+="        # DNS\n"
-    ruleset+="        tcp dport 53 accept\n"
-    ruleset+="        udp dport 53 accept\n"
-    ruleset+="\n"
-
-    # NTP
-    ruleset+="        # NTP\n"
-    ruleset+="        udp dport 123 accept\n"
-    ruleset+="\n"
-
-    # SSH outgoing for restricted IPs
-    if [[ -n "${SSH_ALLOWED_IPS:-}" || -n "${SSH_ALLOWED_IPS_IPV6:-}" ]]; then
-        ruleset+="        # SSH\n"
-        ruleset+="        tcp dport ${ssh_port} accept\n"
-    fi
-
-    # TCP ports (bidirectional)
-    if [[ -n "${TCP_PORTS:-}" ]]; then
-        local tcp_list
-        tcp_list=$(echo "$TCP_PORTS" | tr ' ' ',')
-        ruleset+="        tcp dport { ${tcp_list} } accept\n"
-        ruleset+="        tcp sport { ${tcp_list} } accept\n"
-    fi
-
-    # TCP output-only ports
-    if [[ -n "${TCP_PORTS_OUTPUT:-}" ]]; then
-        local tcp_out_list
-        tcp_out_list=$(echo "$TCP_PORTS_OUTPUT" | tr ' ' ',')
-        ruleset+="        tcp dport { ${tcp_out_list} } accept\n"
-    fi
-
-    # UDP ports
-    if [[ -n "${UDP_PORTS:-}" ]]; then
-        local udp_list
-        udp_list=$(echo "$UDP_PORTS" | tr ' ' ',')
-        ruleset+="        udp dport { ${udp_list} } accept\n"
-        ruleset+="        udp sport { ${udp_list} } accept\n"
-    fi
-
-    # Trusted IPs output
-    ruleset+="\n        # Trusted IPs\n"
-    ruleset+="        ip daddr @trusted_v4 accept\n"
-    ruleset+="        ip6 daddr @trusted_v6 accept\n"
-
-    # Trusted ranges output
-    if [[ -n "${TRUSTED_RANGES:-}" ]]; then
-        for range in $TRUSTED_RANGES; do
-            ruleset+="        ip daddr ${range} accept\n"
-        done
-    fi
-    if [[ -n "${TRUSTED_RANGES_IPV6:-}" ]]; then
-        for range in $TRUSTED_RANGES_IPV6; do
-            ruleset+="        ip6 daddr ${range} accept\n"
-        done
-    fi
-
-    # SMTP
-    if [[ "${SMTP_ENABLE:-true}" == "true" ]]; then
-        ruleset+="\n        # SMTP outgoing\n"
-        ruleset+="        tcp dport 25 accept\n"
-        ruleset+="        tcp dport 587 accept\n"
-    fi
-
-    # ICMP output
-    if [[ "${ICMP_ENABLE:-true}" == "true" ]]; then
-        ruleset+="\n        # ICMP\n"
-        ruleset+="        ip protocol icmp accept\n"
-        ruleset+="        ip6 nexthdr icmpv6 accept\n"
-    fi
-
-    # Multicast output
-    if [[ "${MULTICAST_ENABLE:-false}" == "true" ]]; then
-        ruleset+="\n        # Multicast\n"
-        ruleset+="        pkttype multicast accept\n"
-        ruleset+="        pkttype broadcast accept\n"
-        ruleset+="        ip daddr 224.0.0.0/4 accept\n"
-        ruleset+="        ip6 daddr ff00::/8 accept\n"
-    fi
-
-    if [[ "${LOG_DROPPED:-true}" == "true" ]]; then
-        ruleset+="\n        # Log dropped packets\n"
-        ruleset+="        limit rate 5/minute burst 10 packets log prefix \"binadit-drop-out: \" level warn\n"
     fi
 
     ruleset+="    }\n\n"

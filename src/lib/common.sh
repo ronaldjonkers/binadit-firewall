@@ -184,7 +184,6 @@ print_rule_summary() {
     [[ "${ICMP_ENABLE:-true}" == "true" ]] && features+="${GREEN}ping${NC} "
     [[ "${ICMP_ENABLE:-true}" != "true" ]] && features+="${RED}no-ping${NC} "
     [[ "${MULTICAST_ENABLE:-false}" == "true" ]] && features+="${GREEN}multicast${NC} "
-    [[ "${SMTP_ENABLE:-true}" == "true" ]] && features+="${GREEN}smtp${NC} "
     [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]] && features+="${GREEN}rate-limit${NC} "
     [[ "${LOG_DROPPED:-true}" == "true" ]] && features+="${GREEN}logging${NC} "
     [[ "${NAT_ENABLE:-false}" == "true" ]] && features+="${GREEN}nat${NC} "

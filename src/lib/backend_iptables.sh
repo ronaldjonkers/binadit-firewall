@@ -63,18 +63,16 @@ ipt_apply() {
     # IPv4 RULES
     # =========================================================================
 
-    # Default policies
+    # Default policies — OUTPUT accept: firewall primarily protects inbound
     $ipt -P INPUT DROP
     $ipt -P FORWARD DROP
-    $ipt -P OUTPUT DROP
+    $ipt -P OUTPUT ACCEPT
 
     # Loopback
     $ipt -A INPUT -i lo -j ACCEPT
-    $ipt -A OUTPUT -o lo -j ACCEPT
 
     # Connection tracking
     $ipt -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    $ipt -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     $ipt -A INPUT -m conntrack --ctstate INVALID -j DROP
 
     # Blacklist (inserted at top, before other rules)
@@ -122,20 +120,12 @@ ipt_apply() {
         done
     fi
 
-    # DNS (always allowed outgoing)
-    $ipt -A OUTPUT -p udp --dport 53 -j ACCEPT
-    $ipt -A OUTPUT -p tcp --dport 53 -j ACCEPT
-
-    # NTP
-    $ipt -A OUTPUT -p udp --dport 123 -j ACCEPT
-
     # SSH access — ALWAYS ensure SSH is reachable to prevent lockout
     if [[ -n "${SSH_ALLOWED_IPS:-}" ]]; then
         for ip in $SSH_ALLOWED_IPS; do
             local resolved
             resolved=$(resolve_hostname "$ip" 2>/dev/null) || continue
             $ipt -A INPUT -p tcp --dport "$ssh_port" -s "$resolved" -j ACCEPT
-            $ipt -A OUTPUT -p tcp --sport "$ssh_port" -d "$resolved" -j ACCEPT
         done
     elif [[ -z "${TCP_PORTS:-}" ]] || [[ " ${TCP_PORTS} " != *" ${ssh_port} "* ]]; then
         # SSH port not in TCP_PORTS and no restriction — open SSH to all
@@ -156,39 +146,27 @@ ipt_apply() {
                 local resolved
                 resolved=$(resolve_hostname "$ip_addr" 2>/dev/null) || resolved="$ip_addr"
                 $ipt -A INPUT -p "$proto" --dport "$port_num" -s "$resolved" -j ACCEPT
-                $ipt -A OUTPUT -p "$proto" --sport "$port_num" -d "$resolved" -j ACCEPT
             fi
             IFS=$'\n'
         done
         IFS="$IFS_OLD"
     fi
 
-    # TCP ports (bidirectional)
+    # TCP ports
     for port in $TCP_PORTS; do
         $ipt -A INPUT -p tcp --dport "$port" -j ACCEPT
-        $ipt -A OUTPUT -p tcp --dport "$port" -j ACCEPT
     done
 
     # TCP input-only ports
     if [[ -n "${TCP_PORTS_INPUT:-}" ]]; then
         for port in $TCP_PORTS_INPUT; do
             $ipt -A INPUT -p tcp --dport "$port" -j ACCEPT
-            $ipt -A OUTPUT -p tcp --dport "$port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        done
-    fi
-
-    # TCP output-only ports
-    if [[ -n "${TCP_PORTS_OUTPUT:-}" ]]; then
-        for port in $TCP_PORTS_OUTPUT; do
-            $ipt -A OUTPUT -p tcp --dport "$port" -j ACCEPT
-            $ipt -A INPUT -p tcp --dport "$port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         done
     fi
 
     # UDP ports
     for port in $UDP_PORTS; do
         $ipt -A INPUT -p udp --dport "$port" -j ACCEPT
-        $ipt -A OUTPUT -p udp --dport "$port" -j ACCEPT
     done
 
     # Trusted IPs (full access)
@@ -196,7 +174,6 @@ ipt_apply() {
         local resolved
         resolved=$(resolve_hostname "$entry" 2>/dev/null) || continue
         $ipt -A INPUT -s "$resolved" -j ACCEPT
-        $ipt -A OUTPUT -d "$resolved" -j ACCEPT
     done
 
     # Trusted ranges
@@ -204,10 +181,8 @@ ipt_apply() {
         for range in $TRUSTED_RANGES; do
             if [[ "$range" =~ - ]]; then
                 $ipt -A INPUT -m iprange --src-range "$range" -j ACCEPT
-                $ipt -A OUTPUT -m iprange --dst-range "$range" -j ACCEPT
             else
                 $ipt -A INPUT -s "$range" -j ACCEPT
-                $ipt -A OUTPUT -d "$range" -j ACCEPT
             fi
         done
     fi
@@ -215,17 +190,8 @@ ipt_apply() {
     # Multicast
     if [[ "${MULTICAST_ENABLE:-false}" == "true" ]]; then
         $ipt -A INPUT -d 224.0.0.0/4 -j ACCEPT
-        $ipt -A OUTPUT -d 224.0.0.0/4 -j ACCEPT
         $ipt -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
         $ipt -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
-        $ipt -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
-        $ipt -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
-    fi
-
-    # SMTP
-    if [[ "${SMTP_ENABLE:-true}" == "true" ]]; then
-        $ipt -A OUTPUT -p tcp --dport 25 -j ACCEPT
-        $ipt -A OUTPUT -p tcp --dport 587 -j ACCEPT
     fi
 
     # ICMP
@@ -235,8 +201,8 @@ ipt_apply() {
         $ipt -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
         $ipt -A INPUT -p icmp --icmp-type echo-reply -j ACCEPT
         $ipt -A INPUT -p icmp --icmp-type fragmentation-needed -j ACCEPT
-        $ipt -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
-        $ipt -A OUTPUT -p icmp --icmp-type echo-reply -j ACCEPT
+    else
+        $ipt -A INPUT -p icmp -j DROP
     fi
 
     # SYN flood protection
@@ -345,18 +311,16 @@ ipt_apply() {
     # IPv6 RULES
     # =========================================================================
     if [[ -n "${ipt6:-}" ]]; then
-        # Default policies
+        # Default policies — OUTPUT accept: firewall primarily protects inbound
         $ipt6 -P INPUT DROP
         $ipt6 -P FORWARD DROP
-        $ipt6 -P OUTPUT DROP
+        $ipt6 -P OUTPUT ACCEPT
 
         # Loopback
         $ipt6 -A INPUT -i lo -j ACCEPT
-        $ipt6 -A OUTPUT -o lo -j ACCEPT
 
         # Connection tracking
         $ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        $ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         $ipt6 -A INPUT -m conntrack --ctstate INVALID -j DROP
 
         # Blacklist IPv6
@@ -373,54 +337,34 @@ ipt_apply() {
             done
         fi
 
-        # DNS
-        $ipt6 -A OUTPUT -p udp --dport 53 -j ACCEPT
-        $ipt6 -A OUTPUT -p tcp --dport 53 -j ACCEPT
-
-        # NTP
-        $ipt6 -A OUTPUT -p udp --dport 123 -j ACCEPT
-
         # SSH access IPv6
         if [[ -n "${SSH_ALLOWED_IPS_IPV6:-}" ]]; then
             for ip in $SSH_ALLOWED_IPS_IPV6; do
                 $ipt6 -A INPUT -p tcp --dport "$ssh_port" -s "$ip" -j ACCEPT
-                $ipt6 -A OUTPUT -p tcp --sport "$ssh_port" -d "$ip" -j ACCEPT
             done
         fi
 
         # TCP ports
         for port in $TCP_PORTS; do
             $ipt6 -A INPUT -p tcp --dport "$port" -j ACCEPT
-            $ipt6 -A OUTPUT -p tcp --dport "$port" -j ACCEPT
         done
 
         # TCP input-only
         if [[ -n "${TCP_PORTS_INPUT:-}" ]]; then
             for port in $TCP_PORTS_INPUT; do
                 $ipt6 -A INPUT -p tcp --dport "$port" -j ACCEPT
-                $ipt6 -A OUTPUT -p tcp --dport "$port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-            done
-        fi
-
-        # TCP output-only
-        if [[ -n "${TCP_PORTS_OUTPUT:-}" ]]; then
-            for port in $TCP_PORTS_OUTPUT; do
-                $ipt6 -A OUTPUT -p tcp --dport "$port" -j ACCEPT
-                $ipt6 -A INPUT -p tcp --dport "$port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
             done
         fi
 
         # UDP ports
         for port in $UDP_PORTS; do
             $ipt6 -A INPUT -p udp --dport "$port" -j ACCEPT
-            $ipt6 -A OUTPUT -p udp --dport "$port" -j ACCEPT
         done
 
         # Trusted IPv6
         if [[ -n "${TRUSTED_IPS_IPV6:-}" ]]; then
             for ip in $TRUSTED_IPS_IPV6; do
                 $ipt6 -A INPUT -s "$ip" -j ACCEPT
-                $ipt6 -A OUTPUT -d "$ip" -j ACCEPT
             done
         fi
 
@@ -428,29 +372,29 @@ ipt_apply() {
         if [[ -n "${TRUSTED_RANGES_IPV6:-}" ]]; then
             for range in $TRUSTED_RANGES_IPV6; do
                 $ipt6 -A INPUT -s "$range" -j ACCEPT
-                $ipt6 -A OUTPUT -d "$range" -j ACCEPT
             done
         fi
 
         # Multicast IPv6
         if [[ "${MULTICAST_ENABLE:-false}" == "true" ]]; then
             $ipt6 -A INPUT -d ff00::/8 -j ACCEPT
-            $ipt6 -A OUTPUT -d ff00::/8 -j ACCEPT
             $ipt6 -A INPUT -m pkttype --pkt-type multicast -j ACCEPT
             $ipt6 -A INPUT -m pkttype --pkt-type broadcast -j ACCEPT
-            $ipt6 -A OUTPUT -m pkttype --pkt-type multicast -j ACCEPT
-            $ipt6 -A OUTPUT -m pkttype --pkt-type broadcast -j ACCEPT
         fi
 
-        # SMTP IPv6
-        if [[ "${SMTP_ENABLE:-true}" == "true" ]]; then
-            $ipt6 -A OUTPUT -p tcp --dport 25 -j ACCEPT
-            $ipt6 -A OUTPUT -p tcp --dport 587 -j ACCEPT
+        # ICMPv6 — essential types always allowed for IPv6 to function
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type destination-unreachable -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type packet-too-big -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type time-exceeded -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type parameter-problem -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type router-solicitation -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type router-advertisement -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type neighbour-solicitation -j ACCEPT
+        $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type neighbour-advertisement -j ACCEPT
+        if [[ "${ICMP_ENABLE:-true}" == "true" ]]; then
+            $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type echo-request -j ACCEPT
+            $ipt6 -A INPUT -p ipv6-icmp --icmpv6-type echo-reply -j ACCEPT
         fi
-
-        # ICMPv6 (essential for IPv6 operation)
-        $ipt6 -A INPUT -p ipv6-icmp -j ACCEPT
-        $ipt6 -A OUTPUT -p ipv6-icmp -j ACCEPT
 
         # Logging IPv6
         if [[ "${LOG_DROPPED:-true}" == "true" ]]; then
