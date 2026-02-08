@@ -5,7 +5,7 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)]()
+[![Version](https://img.shields.io/badge/version-3.0.0-green.svg)]()
 
 ## One-Line Install
 
@@ -288,27 +288,37 @@ See `config/firewall.conf.example` for the full configuration reference with all
 
 ## Upgrading
 
-### From v1.x
+### From v1.x (2013)
 
-The easiest way to upgrade:
+The easiest way to upgrade from the original 2013 version:
+
+```bash
+curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
+```
+
+The installer automatically detects the old `/etc/firewall.d/host.conf` config and migrates all settings to the new format. Old files are backed up, not deleted.
+
+Or if already installed:
 
 ```bash
 binadit-firewall upgrade
 ```
 
-Or run the installer — it automatically detects and migrates old configurations from `/etc/firewall.d/host.conf`.
+### From v2.x to v3.0
 
-### From v2.0.x to v2.1.x
-
-Re-run the installer or use the upgrade command. Your configuration is preserved:
+Re-run the installer or use the update command. Your configuration is preserved:
 
 ```bash
-sudo bash install.sh          # detects existing install, preserves config
+binadit-firewall update        # download & install latest version
 # or
-binadit-firewall upgrade      # in-place upgrade
+sudo bash install.sh           # detects existing install, preserves config
 ```
 
-### Variable mappings (v1.x → v2.x)
+**Breaking change in v3.0:** The OUTPUT chain policy changed from `DROP` to `ACCEPT`. All outgoing traffic now works by default. If you relied on OUTPUT DROP to restrict outgoing connections, use `BLOCKED_TCP_PORTS_OUTPUT` / `BLOCKED_UDP_PORTS_OUTPUT` to explicitly block specific outgoing ports.
+
+`SMTP_ENABLE` is deprecated — outgoing mail works by default. To block outgoing SMTP: `BLOCKED_TCP_PORTS_OUTPUT="25 587"`.
+
+### Variable mappings (v1.x → v3.x)
 
 | Old (v1.x) | New (v2.0) |
 |---|---|

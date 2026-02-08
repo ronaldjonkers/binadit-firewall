@@ -1077,7 +1077,7 @@ fw_help() {
   ${BOLD}UPDATES:${NC}
       ${GREEN}update${NC}              Download and install latest version
       ${GREEN}auto-update${NC} on|off  Enable/disable weekly auto-updates
-      ${GREEN}upgrade${NC}             Upgrade from v1.x or older v2.x
+      ${GREEN}upgrade${NC}             Upgrade from v1.x (2013) or older versions
 
   ${BOLD}SYSTEM:${NC}
       ${GREEN}backup${NC}              Create a backup of current rules

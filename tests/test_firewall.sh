@@ -665,7 +665,7 @@ test_version_consistency() {
     version_common=$(grep "BINADIT_VERSION=" "${LIB_DIR}/common.sh" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
     version_main=$(grep "binadit-firewall v" "${SRC_DIR}/binadit-firewall.sh" | head -1 | sed 's/.*v\([0-9.]*\).*/\1/' || echo "")
 
-    assert_equals "Version in common.sh" "2.2.0" "$version_common"
+    assert_equals "Version in common.sh" "3.0.0" "$version_common"
 
     # Check CHANGELOG has the version
     if [[ -f "${PROJECT_DIR}/CHANGELOG.md" ]]; then

@@ -603,7 +603,7 @@ install_dependencies() {
 }
 
 # =============================================================================
-# Detect existing v2.x installation (upgrade path)
+# Detect existing installation (upgrade path: v1.x, v2.x → v3.x)
 # =============================================================================
 
 detect_existing_install() {

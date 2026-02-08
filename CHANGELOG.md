@@ -5,19 +5,23 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.0] - 2026-02-08
+## [3.0.0] - 2026-02-08
+
+### ⚠️ Breaking Changes
+- **OUTPUT policy: ACCEPT** — Firewall now only protects inbound traffic by default. All outgoing connections (DNS, HTTP, NTP, SMTP, etc.) work without explicit rules. Previously OUTPUT was `DROP`, requiring explicit accept rules for every outgoing connection.
+- **SMTP_ENABLE deprecated** — Outgoing mail works by default (OUTPUT accept). To block outgoing SMTP, use `BLOCKED_TCP_PORTS_OUTPUT="25 587"` instead. The config key is kept for backwards compatibility but no longer has any effect.
 
 ### Added
 - **Outgoing port blocking**: New `BLOCKED_TCP_PORTS_OUTPUT` and `BLOCKED_UDP_PORTS_OUTPUT` config keys to block outgoing ports only (e.g., `"25 587"` to block outgoing SMTP/email)
 - **CUSTOM_RULES_FILE support in nftables**: Custom rules file now works in both backends (was iptables-only)
 - **iptables IPv6 security hardening**: Added SYN flood protection, rate limiting, connection limits, and common attack port blocking to IPv6 rules (were completely missing)
 - **iptables IPv6 port blocking**: `BLOCKED_TCP/UDP_PORTS` and `BLOCKED_TCP/UDP_PORTS_OUTPUT` now applied to IPv6 (were IPv4-only)
+- **Default ports 80/443**: HTTP and HTTPS open by default in example config, pre-selected in installer
 
 ### Changed
-- **OUTPUT policy: ACCEPT** — Firewall now only protects inbound traffic by default. All outgoing connections (DNS, HTTP, NTP, SMTP, etc.) work without explicit rules. Use `BLOCKED_*_OUTPUT` to restrict specific outgoing ports.
-- **SMTP_ENABLE deprecated** — Outgoing mail works by default (OUTPUT accept). To block outgoing SMTP, use `BLOCKED_TCP_PORTS_OUTPUT="25 587"` instead
 - **DROP_INVALID** now respects config — Was always hardcoded to true, now checks the `DROP_INVALID` config option in both backends
 - **ICMP blocking** — When `ICMP_ENABLE=false`, explicit drop rules are added before the rate limiter in nftables (previously the rate limiter catch-all accepted ICMP packets)
+- **Upgrade path** — Installer handles v1.x (2013), v2.x, and v3.x upgrades seamlessly with automatic config migration
 
 ### Fixed
 - **nftables SYN flood rule**: Fixed syntax error — `burst 3` changed to `burst 3 packets` (nft requires `packets` keyword)
