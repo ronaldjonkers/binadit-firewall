@@ -5,7 +5,7 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-3.0.3-green.svg)]()
+[![Version](https://img.shields.io/badge/version-3.1.0-green.svg)]()
 
 ## One-Line Install
 
@@ -25,31 +25,34 @@ For automated/unattended installs:
 curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --non-interactive
 ```
 
-That's it. The installer will detect your distro, install dependencies, disable competing firewalls, run the setup wizard, and start the firewall.
+That's it. The installer detects your distro, installs a firewall backend if needed, asks which services should be reachable, validates the configuration and only then switches over: other firewalls (firewalld, ufw, ...) are disabled at the last moment, right before binadit-firewall starts. If anything fails before that point, nothing on your server has changed.
+
+Without a terminal (CI, Ansible, cloud-init) the installer never asks questions: it opens HTTP, HTTPS and SSH and keeps an existing configuration untouched.
+
+Requires `bash` 4+ and `curl` or `wget`.
 
 ## Features
 
 - **Dual backend** — Automatically uses nftables or iptables (whatever is available)
 - **One config file** — All rules in `/etc/binadit-firewall/firewall.conf`
-- **Beautiful output** — ASCII art banners, colored rule summaries, clear status indicators
-- **IPv4 + IPv6** — Full dual-stack support
-- **Port blocking** — Block specific ports inbound, outbound, or both directions
+- **Default deny** — Incoming traffic is dropped unless you allow it; outgoing traffic is allowed unless you block it
+- **Atomic reloads** — The complete ruleset is verified and then swapped in one transaction. A mistake never leaves you with a half-loaded or missing firewall, and open connections survive a reload
+- **IPv4 + IPv6** — Every rule applies to both; every address setting accepts IPv4, IPv6, CIDR, ranges and hostnames
+- **Hostnames that stay correct** — Hostnames are re-checked every 5 minutes; when the IP behind one changes, the rules are reloaded automatically. Resolved addresses are cached, so a DNS outage (or an early boot without DNS) never locks you out
+- **SSH protection** — Restrict SSH to specific IPs/hostnames; without a restriction SSH is always kept reachable
+- **Port blocking** — Block specific ports inbound + outbound, or outbound only
 - **IP-per-port rules** — Allow specific IPs for specific ports (e.g., MySQL only from `10.0.0.5`)
-- **Port forwarding** — DNAT rules for forwarding external ports to internal IPs
-- **IP ranges** — CIDR and dash-notation support for trusted/blocked ranges
-- **SSH protection** — Restrict SSH to specific IPs
-- **SYN flood protection** — Built-in SYN flood mitigation
-- **Rate limiting** — DDoS protection with configurable rate/burst
-- **Connection limits** — Per-IP connection limits and rate limiting
-- **Common attack blocking** — Auto-block telnet, netbios, and other attack vectors
+- **Rate limiting** — Per source IP limit on new TCP connections, with configurable rate/burst
+- **Connection limits** — Per-IP limit on concurrent connections
+- **SYN flood protection** — Kernel SYN cookies + dropping of TCP packets with impossible flags
+- **Port forwarding / NAT** — Use the server as NAT router with DNAT port forwards
 - **Custom rules** — Load additional raw rules from a file
-- **Config validation** — `configtest` validates every setting before applying (prevents lockout)
-- **Login status** — Optional one-line firewall status on every SSH login
-- **Auto-backup** — Rules backed up before every change
+- **Config validation** — `configtest` validates every setting and lets the kernel verify the generated ruleset, without applying it
+- **Login status** — Optional one-line firewall status on every SSH login, and 🟢/🔴 in your prompt
+- **Auto-backup** — Loaded rules are saved before every start/stop
 - **Setup wizard** — Interactive setup for common configurations
-- **Seamless upgrade** — Upgrade from v1.x or older v2.x without config loss
-- **Boot persistence** — Systemd, OpenRC (Alpine/Gentoo), and SysVinit support
-- **Migration** — Automatic migration from v1.x configs
+- **Seamless upgrade** — Upgrade from any older version without config loss
+- **Boot persistence** — Systemd, OpenRC (Alpine/Gentoo), and SysVinit support; rules load before the network comes up
 - **Multi-distro** — Debian, Ubuntu, CentOS, RHEL, Rocky, Alma, Fedora, Arch, Alpine, SUSE
 
 ## Supported Distributions
@@ -97,18 +100,19 @@ Or locally if the repo is cloned:
 sudo bash install.sh --uninstall
 ```
 
-> **Note:** Uninstall removes the firewall binary, systemd service, and flushes all rules.
-> Your configuration in `/etc/binadit-firewall/` is **preserved**. To fully remove it: `sudo rm -rf /etc/binadit-firewall`
+> **Note:** Uninstall removes the program, the boot service, scheduled jobs and all firewall rules — the server has **no firewall** afterwards.
+> Firewalls that the installer disabled (firewalld, ufw, ...) are unmasked again so you can re-enable them.
+> Your configuration in `/etc/binadit-firewall/` is preserved unless you answer yes to removing it.
 
 ## Usage
 
 ```bash
 # Firewall control
-binadit-firewall start                      # Apply firewall rules
+binadit-firewall start                      # Validate config and apply rules
 binadit-firewall stop                       # Remove all rules (allow all)
-binadit-firewall restart                    # Stop + start
-binadit-firewall reload                     # Re-read config and apply
-binadit-firewall status                     # Show rules and summary
+binadit-firewall reload                     # Re-read config, replace rules atomically
+binadit-firewall restart                    # Same as reload (never an unprotected moment)
+binadit-firewall status                     # Active or not + rules (exit 0 = active, 3 = not)
 
 # Configuration via CLI (no need to edit files)
 binadit-firewall config show                # View all current settings
@@ -117,6 +121,7 @@ binadit-firewall config set TCP_PORTS "80 443 8080"  # Set a value
 binadit-firewall config add TCP_PORTS 8080  # Add to a list setting
 binadit-firewall config remove TCP_PORTS 8080  # Remove from a list
 binadit-firewall configtest                 # Validate config before applying
+binadit-firewall dns-refresh                # Re-check hostnames now, reload if an IP changed
 
 # Setup & documentation
 binadit-firewall setup                      # Interactive setup wizard
@@ -124,10 +129,10 @@ binadit-firewall features                   # Full feature overview + docs
 
 # Updates
 binadit-firewall update                     # Download & install latest version
-binadit-firewall auto-update on             # Enable weekly auto-updates (cron)
+binadit-firewall auto-update on             # Enable weekly auto-updates
 binadit-firewall auto-update off            # Disable auto-updates
 binadit-firewall auto-update status         # Show auto-update status & log
-binadit-firewall upgrade                    # Upgrade from v1.x or older v2.x
+binadit-firewall upgrade                    # Migrate a v1.x (2013) config, then update
 
 # System
 binadit-firewall backup                     # Create manual backup
@@ -139,44 +144,52 @@ binadit-firewall version                    # Show version and system info
 binadit-firewall help                       # Show all commands
 ```
 
+Configuration changes take effect when you run `binadit-firewall reload`. Until then `binadit-firewall status` tells you that the config differs from what is loaded.
+
 ### CLI Configuration Management
 
-You can manage **all** firewall settings directly from the command line — no need to edit files manually:
+You can manage **all** firewall settings directly from the command line — no need to edit files manually. Every change is validated; a value that would make the configuration invalid is refused and the file is left untouched.
 
 ```bash
-# View all current settings in a formatted table
+# View all current settings
 binadit-firewall config show
 
 # Open port 8080
 binadit-firewall config add TCP_PORTS 8080
-binadit-firewall configtest    # Validate
-binadit-firewall restart       # Apply
+binadit-firewall reload        # Apply
 
 # Block an IP
 binadit-firewall config add BLACKLIST 1.2.3.4
-binadit-firewall restart
+binadit-firewall reload
 
 # Restrict SSH to specific IPs
 binadit-firewall config set SSH_ALLOWED_IPS "10.0.0.1 office.example.com"
-binadit-firewall restart
-
-# Enable SYN flood protection
-binadit-firewall config set SYN_FLOOD_PROTECT true
-binadit-firewall restart
+binadit-firewall reload
 
 # Remove a port
 binadit-firewall config remove TCP_PORTS 8080
-binadit-firewall restart
+binadit-firewall reload
 
 # Get a single value (scriptable)
 binadit-firewall config get TCP_PORTS
 ```
 
-**List-type settings** (support `add`/`remove`): `TCP_PORTS`, `UDP_PORTS`, `BLOCKED_TCP_PORTS`, `BLOCKED_UDP_PORTS`, `BLOCKED_TCP_PORTS_OUTPUT`, `BLOCKED_UDP_PORTS_OUTPUT`, `SSH_ALLOWED_IPS`, `TRUSTED_IPS`, `TRUSTED_RANGES`, `BLACKLIST`, `BLOCKED_RANGES` (and their IPv6 variants).
+**List-type settings** (support `add`/`remove`): `TCP_PORTS`, `TCP_PORTS_INPUT`, `UDP_PORTS`, `BLOCKED_TCP_PORTS`, `BLOCKED_UDP_PORTS`, `BLOCKED_TCP_PORTS_OUTPUT`, `BLOCKED_UDP_PORTS_OUTPUT`, `SSH_PORT`, `SSH_ALLOWED_IPS`, `TRUSTED_IPS`, `TRUSTED_RANGES`, `BLACKLIST`, `BLOCKED_RANGES` (and their `_IPV6` variants).
 
 **All other settings** use `config set` (e.g., booleans, numbers, interfaces).
 
 Run `binadit-firewall features` for a complete reference of every setting with descriptions and defaults.
+
+### Hostnames
+
+Every address setting accepts hostnames (`office.example.com`). They are resolved to **all** their A and AAAA records when the rules are loaded.
+
+- **Automatic re-check** — every `DNS_REFRESH_INTERVAL` minutes (default `5`) all hostnames are resolved again. If an address changed, the rules are reloaded atomically and the change is written to syslog (`journalctl -t binadit-firewall`). Nothing happens when nothing changed. Set `DNS_REFRESH_INTERVAL="0"` to turn it off.
+- **Cache** — the last known addresses are stored in `/etc/binadit-firewall/state/dns-cache`. If DNS is unavailable (also: at boot, before the network is up) the cached addresses are used, so you are never locked out by a DNS problem.
+- **Safe** — the automatic reload uses the configuration that is currently loaded. A half-finished edit of `firewall.conf` is never applied behind your back.
+- **Run it now** — `binadit-firewall dns-refresh`
+
+The schedule is a systemd timer (`binadit-firewall-dns.timer`), or a cron job on systems without systemd (`/etc/cron.d/binadit-firewall-dns`; on Alpine `/etc/periodic/15min/`, which runs every 15 minutes regardless of the configured interval). It is created automatically when your configuration contains hostnames and removed when it does not.
 
 ### Self-Update
 
@@ -184,7 +197,7 @@ Run `binadit-firewall features` for a complete reference of every setting with d
 # Check for updates and install
 binadit-firewall update
 
-# Enable weekly automatic updates (uses /etc/cron.weekly/)
+# Enable weekly automatic updates
 binadit-firewall auto-update on
 
 # Check auto-update status
@@ -194,7 +207,9 @@ binadit-firewall auto-update status
 binadit-firewall auto-update off
 ```
 
-Updates only replace program files — your configuration is **always preserved**. The auto-update cron job runs weekly and logs to `/var/log/binadit-firewall-update.log`.
+An update replaces the program files only — your configuration is **always preserved**. The download is verified before anything is installed. If the firewall is active, the rules are then reloaded with the new version (atomically, using the configuration that is currently loaded); if that reload fails, the old rules simply stay active.
+
+Auto-update uses `/etc/cron.weekly/` when it exists and a systemd timer (`binadit-firewall-update.timer`) otherwise, and logs to `/var/log/binadit-firewall-update.log`.
 
 During installation, you are offered the option to enable weekly auto-updates automatically.
 
@@ -220,111 +235,131 @@ Example with firewall stopped:
 🔴 [root@server ~]#
 ```
 
-The indicator updates on every command, so you'll immediately see if the firewall goes down. Works in bash. Takes effect on next login.
+The indicator is re-checked on every prompt, so you'll immediately see if the firewall goes down. Works in bash, for root and members of the `sudo`/`wheel` group. Takes effect on next login.
 
 ## Configuration
 
-Edit `/etc/binadit-firewall/firewall.conf` or use `binadit-firewall config` commands:
+Edit `/etc/binadit-firewall/firewall.conf` or use `binadit-firewall config` commands, then run `binadit-firewall reload`.
 
 ```bash
-# Open TCP ports (space-separated, ranges with colon)
-TCP_PORTS="80 443 8080"
-
-# Open UDP ports
+# Incoming TCP/UDP ports open to everyone (ranges with a colon)
+TCP_PORTS="80 443 8000:9000"
+TCP_PORTS_INPUT=""               # same as TCP_PORTS (compatibility)
 UDP_PORTS="51820"
 
-# Block specific ports (both directions)
+# Block ports in both directions (wins over every allow rule)
 BLOCKED_TCP_PORTS="23 135 139 445"
+BLOCKED_UDP_PORTS=""
 
-# Block outgoing ports only (e.g. prevent server from sending email)
-BLOCKED_TCP_PORTS_OUTPUT="25 587"
+# Block outgoing ports only (e.g. prevent the server from sending mail)
+BLOCKED_TCP_PORTS_OUTPUT="25 465 587"
+BLOCKED_UDP_PORTS_OUTPUT=""
 
-# Restrict SSH to specific IPs
-SSH_ALLOWED_IPS="1.2.3.4 office.example.com 10.0.0.0/24"
+# SSH: empty SSH_PORT = detected from sshd. Empty allow-list = open to all.
+# With an allow-list SSH is closed for everyone else.
+SSH_PORT=""
+SSH_ALLOWED_IPS="1.2.3.4 office.example.com 10.0.0.0/24 2001:db8::/32"
 
-# Trusted IPs (full access)
+# Trusted (full access, never rate limited) and blacklisted (blocked in + out)
 TRUSTED_IPS="10.0.0.1 management.example.com"
-
-# Blacklisted IPs
+TRUSTED_RANGES="192.168.1.1-192.168.1.254"
 BLACKLIST="5.6.7.8 bad-actor.example.com"
-
-# Allow specific IPs for specific ports
-# Format: protocol|port|ip
-PORT_IP_RULES="tcp|3306|10.0.0.5
-tcp|5432|10.0.0.6
-tcp|6379|192.168.1.0/24"
-
-# IP ranges (CIDR or dash notation)
-TRUSTED_RANGES="192.168.1.0/24"
 BLOCKED_RANGES="65.208.151.1-65.208.151.254"
 
+# Open a port for specific addresses only — format: protocol|port|address
+PORT_IP_RULES="tcp|3306|10.0.0.5
+tcp|5432|db-client.example.com
+tcp|6379|192.168.1.0/24"
+
+# Re-check hostnames every N minutes, reload when an IP changed (0 = off)
+DNS_REFRESH_INTERVAL="5"
+
+# Rate limiting: new TCP connections per source IP
+RATE_LIMIT_ENABLE="true"
+RATE_LIMIT_RATE="25"             # per second; or e.g. "600/minute"
+RATE_LIMIT_BURST="100"           # extra connections allowed in a burst
+CONN_RATE_PER_IP="0"             # optional hard cap per second, no burst (0 = off)
+CONN_LIMIT_ENABLE="false"        # limit concurrent connections per IP
+CONN_LIMIT_PER_IP="50"
+
+# Hardening
+SYN_FLOOD_PROTECT="true"         # kernel SYN cookies + drop impossible TCP flags
+DROP_INVALID="true"              # drop packets that belong to no connection
+BLOCK_COMMON_ATTACKS="true"      # silently drop telnet/netbios/SMB/SSDP probes
+
 # Features
-ICMP_ENABLE="true"           # Allow ping
-MULTICAST_ENABLE="false"     # For clusters/load balancers
-# SMTP_ENABLE — deprecated (outgoing is open by default)
-RATE_LIMIT_ENABLE="true"     # DDoS protection
-LOG_DROPPED="true"           # Log dropped packets
+ICMP_ENABLE="true"               # answer ping
+MULTICAST_ENABLE="false"         # for clusters/load balancers
+LOG_DROPPED="true"               # log dropped packets (max 5/minute)
 
-# Security hardening
-SYN_FLOOD_PROTECT="true"     # SYN flood protection
-CONN_LIMIT_ENABLE="false"    # Per-IP connection limit
-CONN_LIMIT_PER_IP="50"       # Max connections per IP
-BLOCK_COMMON_ATTACKS="true"  # Block telnet, netbios, etc.
-
-# Port forwarding (requires NAT_ENABLE)
-PORT_FORWARD_RULES="tcp|8080|192.168.1.100:80
-tcp|2222|192.168.1.100:22"
-
-# NAT routing
+# NAT routing + port forwarding — format: protocol|ext_port|ip:port
 NAT_ENABLE="false"
 NAT_EXTERNAL_IFACE="eth0"
 NAT_INTERNAL_IFACE="eth1"
+PORT_FORWARD_RULES="tcp|8080|192.168.1.100:80
+tcp|2222|192.168.1.100:22"
 
-# Custom rules (for advanced users)
+# Custom rules (nft syntax on nftables, iptables-restore syntax on iptables)
 CUSTOM_RULES_FILE="/etc/binadit-firewall/custom.rules"
 ```
 
+The `_IPV6` variants of the address settings (`SSH_ALLOWED_IPS_IPV6`, `TRUSTED_IPS_IPV6`, `TRUSTED_RANGES_IPV6`, `BLACKLIST_IPV6`, `BLOCKED_RANGES_IPV6`) still work and behave exactly like the settings without the suffix. `TCP_PORTS_OUTPUT` and `SMTP_ENABLE` are deprecated and have no effect: outgoing traffic is always allowed unless blocked with `BLOCKED_*_PORTS_OUTPUT`. `BINADIT_DEBUG="true"` enables debug logging.
+
 See `config/firewall.conf.example` for the full configuration reference with all options documented.
+
+### In which order are rules checked?
+
+For incoming traffic, the first match wins:
+
+1. Loopback → allowed
+2. `BLACKLIST` / `BLOCKED_RANGES` → dropped (also existing connections)
+3. Existing connections → allowed; invalid packets → dropped
+4. `BLOCKED_TCP_PORTS` / `BLOCKED_UDP_PORTS` → dropped
+5. `TRUSTED_IPS` / `TRUSTED_RANGES` → allowed
+6. ICMPv6 that IPv6 itself needs → allowed
+7. `SSH_ALLOWED_IPS` → allowed on the SSH port
+8. SYN flood protection, connection limit, rate limits → dropped when over the limit
+9. `PORT_IP_RULES` → allowed
+10. SSH → allowed (no allow-list) or dropped (allow-list set)
+11. `TCP_PORTS` / `UDP_PORTS` → allowed
+12. Ping, multicast (when enabled) → allowed
+13. Everything else → dropped (and logged)
+
+### Limitations
+
+- **Docker / Kubernetes hosts** are not supported: forwarded traffic is dropped by default, which breaks container networking. (On the iptables backend, `start`/`stop` also flush the rules Docker created.)
+- Rate and connection limits only apply to TCP.
+- Port forwarding is IPv4 only.
 
 ## Upgrading
 
-### From v1.x (2013)
+### From any v2.x / v3.x
 
-The easiest way to upgrade from the original 2013 version:
+```bash
+binadit-firewall update        # download & install the latest version
+```
+
+or re-run the one-line installer. Your configuration is preserved either way.
+
+**Upgrading from 3.0.x to 3.1:** versions up to 3.0.3 keep the old rules loaded after `binadit-firewall update`. Run `binadit-firewall restart` once to load the corrected rules (from 3.1 on, an update reloads the rules by itself). See the [CHANGELOG](CHANGELOG.md) for what changed — most importantly, closed ports are now really closed.
+
+**Breaking change in v3.0:** The OUTPUT chain policy changed from `DROP` to `ACCEPT`. All outgoing traffic works by default. Use `BLOCKED_TCP_PORTS_OUTPUT` / `BLOCKED_UDP_PORTS_OUTPUT` to block specific outgoing ports, e.g. `BLOCKED_TCP_PORTS_OUTPUT="25 465 587"` to block outgoing mail. `SMTP_ENABLE` no longer has any effect.
+
+### From v1.x (2013)
 
 ```bash
 curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
 ```
 
-The installer automatically detects the old `/etc/firewall.d/host.conf` config and migrates all settings to the new format. Old files are backed up, not deleted.
-
-Or if already installed:
-
-```bash
-binadit-firewall upgrade
-```
-
-### From v2.x to v3.0
-
-Re-run the installer or use the update command. Your configuration is preserved:
-
-```bash
-binadit-firewall update        # download & install latest version
-# or
-sudo bash install.sh           # detects existing install, preserves config
-```
-
-**Breaking change in v3.0:** The OUTPUT chain policy changed from `DROP` to `ACCEPT`. All outgoing traffic now works by default. If you relied on OUTPUT DROP to restrict outgoing connections, use `BLOCKED_TCP_PORTS_OUTPUT` / `BLOCKED_UDP_PORTS_OUTPUT` to explicitly block specific outgoing ports.
-
-`SMTP_ENABLE` is deprecated — outgoing mail works by default. To block outgoing SMTP: `BLOCKED_TCP_PORTS_OUTPUT="25 587"`.
+The installer detects the old `/etc/firewall.d/host.conf` and migrates all settings to the new format. Old files are renamed, not deleted, and the old init script is retired.
 
 ### Variable mappings (v1.x → v3.x)
 
-| Old (v1.x) | New (v2.0) |
+| Old (v1.x) | New |
 |---|---|
 | `TCPPORTS` | `TCP_PORTS` |
 | `TCPPORTS_INPUT` | `TCP_PORTS_INPUT` |
-| `TCPPORTS_OUTPUT` | `TCP_PORTS_OUTPUT` |
+| `TCPPORTS_OUTPUT` | *(not needed: outgoing traffic is allowed)* |
 | `UDPPORTS` | `UDP_PORTS` |
 | `DMZS` | `TRUSTED_IPS` |
 | `SSHACCESS` | `SSH_ALLOWED_IPS` |
@@ -351,7 +386,8 @@ binadit-firewall/
 │       ├── backend_nftables.sh         # nftables implementation
 │       └── backend_iptables.sh         # iptables implementation
 ├── tests/
-│   └── test_firewall.sh               # Test suite (188 tests)
+│   ├── test_firewall.sh                # Unit tests (no root needed)
+│   └── test_integration.sh             # Real-kernel tests with real connections
 ├── CHANGELOG.md
 ├── LICENSE                             # GPL-2.0
 └── README.md
@@ -360,31 +396,26 @@ binadit-firewall/
 ## Running Tests
 
 ```bash
-bash tests/test_firewall.sh
+bash tests/test_firewall.sh              # unit tests — no root, no firewall needed
+sudo bash tests/test_integration.sh      # integration tests — Linux + root
 ```
 
-Tests cover:
-- IPv4/IPv6/CIDR/port validation
-- Configuration file completeness (including v2.2.0 features)
-- Project structure integrity
-- Systemd service correctness
-- Install script coverage (including OpenRC, upgrade detection)
-- Backend function availability
-- UI functions (banners, rule summary)
-- configtest validation (valid config, bad syntax, invalid ports, invalid booleans)
-- Security features (SYN flood, conn limits, port forwarding)
-- Version consistency
-- Logging functions
+The **unit tests** cover validation, config handling, the CLI, hostname resolution/caching, v1 migration, and the generated rulesets for both backends (including: no rule may ever accept traffic that the configuration did not open).
+
+The **integration tests** load the rules into the kernel and verify them with real connections between network namespaces, for nftables and iptables: open ports are open, everything else is closed, SSH restrictions, trusted/blacklisted addresses, per-IP rate and connection limits, hostname changes, atomic reload and more. They run in a private network namespace and never touch the firewall of the machine you run them on.
+
+Both suites run in CI on every push.
 
 ## How It Works
 
-1. **Backend detection** — On start, binadit-firewall checks for `nft` (nftables) first, then falls back to `iptables`
-2. **Config parsing** — The configuration file is sourced as bash, making it simple and familiar
-3. **Rule generation** — Rules are generated based on the detected backend:
-   - **nftables**: Generates a complete ruleset file and applies it atomically
-   - **iptables**: Applies rules sequentially via iptables/ip6tables commands
-4. **Persistence** — Systemd service ensures rules are applied on boot
-5. **Backup** — Before any change, current rules are backed up to `/etc/binadit-firewall/backups/`
+1. **Backend detection** — binadit-firewall uses `nft` (nftables) when it works, otherwise `iptables`. Force one with `BINADIT_BACKEND=nftables|iptables`.
+2. **Config parsing** — The configuration file is sourced as bash, making it simple and familiar. Keys that are missing (configs from older versions) get safe defaults.
+3. **Hostname resolution** — Hostnames are resolved (A + AAAA) with a cache fallback.
+4. **Rule generation** — A complete ruleset is generated and verified by the kernel first (`nft -c` / `iptables-restore --test`):
+   - **nftables**: own tables `inet binadit` (+ `ip binadit_nat` for NAT), replaced in one transaction. Other tables on the system are not touched.
+   - **iptables**: the `filter` (and `nat`) table is replaced in one `iptables-restore` commit, for IPv4 and IPv6.
+5. **Persistence** — The boot service loads the rules before the network comes up.
+6. **Backup** — Before every start/stop the loaded rules are saved to `/etc/binadit-firewall/backups/` (the 30 newest files are kept).
 
 ## Troubleshooting
 
@@ -398,8 +429,13 @@ binadit-firewall version
 # View current rules
 binadit-firewall status
 
-# Check systemd service
+# Validate the config and let the kernel check the generated rules
+binadit-firewall configtest
+
+# Check systemd service and the hostname re-check timer
 systemctl status binadit-firewall
+systemctl list-timers 'binadit-firewall*'
+journalctl -t binadit-firewall
 
 # View drop logs
 journalctl -k | grep binadit-drop

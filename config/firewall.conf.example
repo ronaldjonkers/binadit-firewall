@@ -1,144 +1,168 @@
 # =============================================================================
-# binadit-firewall v3.0.0 - Configuration File
+# binadit-firewall v3.1.0 - Configuration File
 # =============================================================================
 # Location: /etc/binadit-firewall/firewall.conf
 #
 # This file is sourced as a bash script. Use bash variable syntax.
-# Ports can be single (80) or ranges (8000:9000).
-# IPs can be single (1.2.3.4), CIDR (10.0.0.0/24), or hostnames.
 # Separate multiple values with spaces.
+#
+#   Ports      single (80) or a range with a colon (8000:9000)
+#   Addresses  IPv4 (1.2.3.4), IPv6 (2001:db8::1), CIDR (10.0.0.0/24),
+#              range (1.2.3.4-1.2.3.9) or hostname (office.example.com)
+#
+# How traffic is handled:
+#   Incoming   dropped, unless allowed below
+#   Outgoing   allowed, unless blocked below
+#
+# After editing:  binadit-firewall configtest   (check for mistakes)
+#                 binadit-firewall reload       (apply — atomic, no downtime)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# TCP PORTS
+# OPEN PORTS (incoming)
 # -----------------------------------------------------------------------------
-# Ports open for both incoming and outgoing TCP traffic
-# Example: "22 80 443 8080 20000:25000"
+# TCP ports open to everyone
+# Example: "80 443 8080 20000:25000"
 TCP_PORTS="80 443"
 
-# Ports open for incoming TCP connections only
+# Same as TCP_PORTS (kept for compatibility with older configs)
 TCP_PORTS_INPUT=""
 
-# Ports open for outgoing TCP connections only
-TCP_PORTS_OUTPUT=""
-
-# -----------------------------------------------------------------------------
-# UDP PORTS
-# -----------------------------------------------------------------------------
-# Ports open for both incoming and outgoing UDP traffic
+# UDP ports open to everyone
 # Example: "53 123 51820"
 UDP_PORTS=""
 
 # -----------------------------------------------------------------------------
-# BLOCKED PORTS (both directions)
+# BLOCKED PORTS
 # -----------------------------------------------------------------------------
-# TCP ports to explicitly block inbound AND outbound (overrides other rules)
+# TCP/UDP ports blocked in BOTH directions. These win over every allow rule,
+# including trusted IPs.
 # Example: "23 135 139 445"
 BLOCKED_TCP_PORTS=""
-
-# UDP ports to explicitly block inbound AND outbound
 BLOCKED_UDP_PORTS=""
 
-# -----------------------------------------------------------------------------
-# BLOCKED OUTGOING PORTS (output only)
-# -----------------------------------------------------------------------------
-# TCP ports to block outgoing only (e.g. block outgoing email)
-# Example: "25 587" to block outgoing SMTP
+# Ports blocked for OUTGOING traffic only
+# Example: "25 465 587" stops this server from sending mail directly
 BLOCKED_TCP_PORTS_OUTPUT=""
-
-# UDP ports to block outgoing only
 BLOCKED_UDP_PORTS_OUTPUT=""
 
 # -----------------------------------------------------------------------------
 # SSH ACCESS
 # -----------------------------------------------------------------------------
-# Restrict SSH access to specific IPv4 addresses/hostnames
-# Leave empty to NOT add SSH-specific rules (SSH port must be in TCP_PORTS then)
-# Example: "1.2.3.4 office.example.com 10.0.0.0/24"
+# SSH port(s). Leave empty to detect them automatically from sshd.
+SSH_PORT=""
+
+# Restrict SSH to these addresses/hostnames.
+# Empty = SSH is open to everyone (you can never lock yourself out).
+# When set, SSH is closed for everyone else — even if the SSH port is also
+# listed in TCP_PORTS.
+# Example: "1.2.3.4 office.example.com 10.0.0.0/24 2001:db8::/32"
 SSH_ALLOWED_IPS=""
 
-# Restrict SSH access to specific IPv6 addresses (no hostnames!)
-# Example: "2001:db8::1 2001:db8::/32"
+# Additional entries (same meaning; kept for compatibility)
 SSH_ALLOWED_IPS_IPV6=""
 
 # -----------------------------------------------------------------------------
-# TRUSTED IPS (Full Access)
+# TRUSTED IPS (full access)
 # -----------------------------------------------------------------------------
-# IPv4 addresses, hostnames, or CIDR blocks with full server access
+# Full access to every port, exempt from all rate limits.
 # Example: "1.2.3.4 office.example.com 10.0.0.0/8"
 TRUSTED_IPS=""
-
-# IPv6 addresses or CIDR blocks with full server access
-# Example: "2001:db8::1 2001:db8::/32"
 TRUSTED_IPS_IPV6=""
 
-# Trusted IP ranges (dash notation for iptables, CIDR preferred for nftables)
+# Same, for ranges
 # Example: "192.168.1.1-192.168.1.254"
 TRUSTED_RANGES=""
-
-# Trusted IPv6 ranges
 TRUSTED_RANGES_IPV6=""
 
 # -----------------------------------------------------------------------------
-# BLACKLIST (Blocked IPs)
+# BLACKLIST (blocked completely)
 # -----------------------------------------------------------------------------
-# IPv4 addresses or CIDR blocks to completely block
-# Example: "1.2.3.4 5.6.7.0/24"
+# Blocked in both directions, including already open connections.
+# Example: "1.2.3.4 5.6.7.0/24 bad-actor.example.com"
 BLACKLIST=""
-
-# IPv6 addresses or CIDR blocks to completely block
 BLACKLIST_IPV6=""
 
-# Blocked IP ranges (dash notation)
+# Same, for ranges
 # Example: "65.208.151.1-65.208.151.254"
 BLOCKED_RANGES=""
-
-# Blocked IPv6 ranges
 BLOCKED_RANGES_IPV6=""
 
 # -----------------------------------------------------------------------------
 # PORT-SPECIFIC IP RULES
 # -----------------------------------------------------------------------------
-# Allow specific IPs to access specific ports.
-# Format: one rule per line, fields separated by pipe (|)
-#   protocol | port | ip_address
+# Open a port for specific addresses only (do NOT also list it in TCP_PORTS).
+# Format: one rule per line:  protocol|port|address
 #
 # Example:
 # PORT_IP_RULES="tcp|3306|10.0.0.5
-# tcp|5432|10.0.0.6
+# tcp|5432|db-client.example.com
 # tcp|6379|192.168.1.0/24
 # udp|5060|sip.example.com"
 PORT_IP_RULES=""
 
 # -----------------------------------------------------------------------------
-# FEATURES
+# HOSTNAMES
 # -----------------------------------------------------------------------------
-# Enable ICMP (ping) - recommended to keep enabled
-ICMP_ENABLE="true"
+# Hostnames used above are resolved to their IPv4 and IPv6 addresses when the
+# rules are loaded, and re-checked every DNS_REFRESH_INTERVAL minutes. When an
+# address behind a hostname changed, the rules are reloaded automatically.
+# 0 = never re-check (addresses only update on reload/restart).
+DNS_REFRESH_INTERVAL="5"
 
-# Enable multicast traffic (for load balancers, clusters)
-MULTICAST_ENABLE="false"
-
-# DEPRECATED: outgoing traffic is open by default (OUTPUT policy accept).
-# To block outgoing SMTP, use BLOCKED_TCP_PORTS_OUTPUT="25 587" instead.
-SMTP_ENABLE="true"
-
-# Enable connection rate limiting (DDoS protection)
+# -----------------------------------------------------------------------------
+# RATE LIMITING
+# -----------------------------------------------------------------------------
+# Limit new TCP connections per source IP (IPv6: per /64 network).
+# Trusted IPs and the SSH allow-list are never limited.
 RATE_LIMIT_ENABLE="true"
 
-# Rate limit: connections per second (iptables) or "X/second" (nftables)
+# Sustained new connections per source IP: "25" (per second) or "600/minute"
 RATE_LIMIT_RATE="25"
 
-# Rate limit burst
+# Extra connections one IP may open in a short burst on top of the rate
 RATE_LIMIT_BURST="100"
 
-# Log dropped packets to syslog
+# Optional hard cap on new TCP connections per second per source IP, without
+# burst allowance. 0 = disabled.
+CONN_RATE_PER_IP="0"
+
+# Limit concurrent TCP connections per source IP
+CONN_LIMIT_ENABLE="false"
+CONN_LIMIT_PER_IP="50"
+
+# -----------------------------------------------------------------------------
+# SECURITY HARDENING
+# -----------------------------------------------------------------------------
+# SYN flood protection: enables kernel SYN cookies and drops TCP packets with
+# impossible flag combinations
+SYN_FLOOD_PROTECT="true"
+
+# Drop packets that do not belong to any known connection
+DROP_INVALID="true"
+
+# Silently drop probes on ports 23, 135, 137-139, 445 and 1900 (telnet,
+# netbios, SMB, SSDP) so they do not flood the log. A port you open explicitly
+# in TCP_PORTS/UDP_PORTS stays open.
+BLOCK_COMMON_ATTACKS="true"
+
+# -----------------------------------------------------------------------------
+# FEATURES
+# -----------------------------------------------------------------------------
+# Answer ping (IPv4 and IPv6). ICMPv6 needed for IPv6 itself is always allowed.
+ICMP_ENABLE="true"
+
+# Accept multicast and broadcast traffic (clusters, VRRP, load balancers)
+MULTICAST_ENABLE="false"
+
+# Log dropped packets to the kernel log (max 5 per minute)
+# View: journalctl -k | grep binadit-drop
 LOG_DROPPED="true"
 
 # -----------------------------------------------------------------------------
 # NAT / ROUTING
 # -----------------------------------------------------------------------------
-# Enable NAT routing (for gateway/router setups)
+# Act as a NAT router for a LAN (gateway setups)
 NAT_ENABLE="false"
 
 # External network interface (internet-facing)
@@ -148,32 +172,11 @@ NAT_EXTERNAL_IFACE="eth0"
 NAT_INTERNAL_IFACE="eth1"
 
 # -----------------------------------------------------------------------------
-# SECURITY HARDENING
-# -----------------------------------------------------------------------------
-# SYN flood protection (recommended)
-SYN_FLOOD_PROTECT="true"
-
-# Limit concurrent connections per source IP (0 = disabled)
-# Useful to prevent a single IP from hogging resources
-CONN_LIMIT_ENABLE="false"
-CONN_LIMIT_PER_IP="50"
-
-# Limit new connections per second per source IP (0 = disabled)
-CONN_RATE_PER_IP="15"
-
-# Drop invalid packets (recommended)
-DROP_INVALID="true"
-
-# Block common attack ports (telnet, netbios, etc.)
-# Adds: 23, 135, 137-139, 445, 1900
-BLOCK_COMMON_ATTACKS="true"
-
-# -----------------------------------------------------------------------------
 # PORT FORWARDING (DNAT)
 # -----------------------------------------------------------------------------
-# Forward external ports to internal IPs (requires NAT_ENABLE=true)
-# Format: one rule per line, fields separated by pipe (|)
-#   protocol | external_port | internal_ip:internal_port
+# Forward ports arriving on the external interface to hosts on the LAN.
+# Requires NAT_ENABLE="true".
+# Format: one rule per line:  protocol|external_port|internal_ip:internal_port
 #
 # Example:
 # PORT_FORWARD_RULES="tcp|8080|192.168.1.100:80
@@ -184,14 +187,21 @@ PORT_FORWARD_RULES=""
 # -----------------------------------------------------------------------------
 # CUSTOM RULES
 # -----------------------------------------------------------------------------
-# Path to a file with additional raw rules (iptables or nft syntax)
-# These are appended after all other rules. Leave empty to disable.
+# File with additional raw rules, loaded after the managed rules on every
+# start/reload. nftables backend: nft syntax (e.g. "add rule inet binadit
+# input ..."). iptables backend: iptables-restore syntax.
 # Example: CUSTOM_RULES_FILE="/etc/binadit-firewall/custom.rules"
 CUSTOM_RULES_FILE=""
 
 # -----------------------------------------------------------------------------
 # ADVANCED
 # -----------------------------------------------------------------------------
-# Enable debug logging (set to "true" for troubleshooting)
-# Can also be set via environment: BINADIT_DEBUG=true
+# Debug logging. Can also be set via environment: BINADIT_DEBUG=true
 BINADIT_DEBUG="false"
+
+# -----------------------------------------------------------------------------
+# DEPRECATED (no effect, kept so older configs keep loading)
+# -----------------------------------------------------------------------------
+# Outgoing traffic is always allowed; use BLOCKED_TCP_PORTS_OUTPUT to block.
+TCP_PORTS_OUTPUT=""
+SMTP_ENABLE="true"

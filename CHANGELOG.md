@@ -5,6 +5,68 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-11-19
+
+Security and correctness release. Every documented feature was checked against
+what the firewall really does in the kernel; the differences are fixed below.
+**After updating from 3.0.x, run `binadit-firewall restart` once** to load the
+corrected rules.
+
+### 🔒 Security
+- **Closed ports were reachable.** The "rate limiting" rule (`RATE_LIMIT_ENABLE`, on by default) *accepted* every new connection to *any* port as long as it stayed under the rate, and the "SYN flood protection" rule did the same for TCP. In practice ports that were not in `TCP_PORTS` (databases, admin panels, ...) were open to the internet on both backends. Limiters now only ever **drop** traffic that exceeds a limit; nothing is accepted unless the configuration opens it.
+- **`SSH_ALLOWED_IPS` could be bypassed.** With the SSH port also in `TCP_PORTS`, or with only `SSH_ALLOWED_IPS_IPV6` set, SSH stayed open to everyone. An allow-list (IPv4 or IPv6) now always closes SSH for everybody else.
+- **NAT router exposed the LAN.** Anything routed to the internal interface was accepted. Now only replies and configured port forwards may enter the LAN, and port forwards only apply to traffic arriving on the external interface (previously a forward for port 443 also hijacked the LAN's own outgoing HTTPS).
+- **`BLACKLIST` on nftables** now also blocks existing connections and outgoing traffic to the address, like the iptables backend already did.
+
+### Added
+- **Automatic hostname re-check**: hostnames in the configuration are resolved again every `DNS_REFRESH_INTERVAL` minutes (default 5). When the IP behind a hostname changed, the rules are reloaded automatically and the change is logged. New command: `binadit-firewall dns-refresh`. Installed as systemd timer (or `/etc/cron.d` job) as soon as the configuration contains hostnames.
+- **DNS cache**: resolved addresses are stored on disk. When DNS is down — or not available yet at boot — the last known addresses are used instead of silently dropping the rule (which could lock an admin out after a reboot).
+- **Hostnames everywhere**: all A *and* AAAA records of a hostname are used, in every address setting (`BLACKLIST` and `PORT_IP_RULES` included). Every address setting accepts IPv4, IPv6, CIDR, ranges and hostnames.
+- **`SSH_PORT`** setting to set the SSH port(s) explicitly. Auto-detection now reads the effective sshd configuration (`sshd -T`, `sshd_config.d`, multiple ports).
+- **Kernel dry-run**: `configtest` (as root) generates the ruleset and has the kernel verify it without applying.
+- **`status`** now states whether the firewall is active (exit code 0/3) and warns when `firewall.conf` was edited but not applied yet.
+- **Integration test suite** (`tests/test_integration.sh`): loads the rules into a real kernel and verifies behaviour with real connections, for both backends. Runs in CI together with the unit tests.
+- `auto-update` works on systems without cron (systemd timer). `update --force` reinstalls the current version.
+- DHCPv6 client replies are accepted (IPv6 addresses via DHCPv6 kept working only by accident).
+
+### Changed
+- **Atomic apply on both backends.** The ruleset is generated, verified, and swapped in a single transaction. Previously nftables deleted the old table first (a rejected ruleset left the server with *no* firewall) and iptables applied rules one by one (an error half-way left a half-configured firewall, possibly without SSH access).
+- **`restart` no longer stops the firewall first** — it replaces the rules atomically, like `reload`. No unprotected moment, and a config error can no longer leave the firewall switched off.
+- **Rate limits are per source IP** (IPv6: per /64) and apply to new TCP connections on your open ports, where they previously had no effect at all. One abusive client can no longer use up the limit for everyone. Trusted IPs and the SSH allow-list are exempt.
+  - `RATE_LIMIT_RATE` / `RATE_LIMIT_BURST`: sustained rate + burst per IP.
+  - `CONN_RATE_PER_IP`: hard per-second cap per IP (was not implemented on nftables). **Existing configs contain `15` from the old template and this is now enforced**; set it to `0` if clients behind one address (NAT, proxy, load balancer) legitimately open more than 15 connections per second — or add them to `TRUSTED_IPS`. New installs default to `0`.
+  - `CONN_LIMIT_PER_IP`: was a single global counter on nftables, is now per IP.
+- **`SYN_FLOOD_PROTECT`** enables kernel SYN cookies and drops TCP packets with impossible flag combinations (replaces the 1 connection/second rule described above).
+- **`update` reloads the rules** with the new version when the firewall is active (atomically; on failure the old rules stay). The download is verified before installing, and the program directory is swapped atomically.
+- **Automatic reloads** (hostname change, update) use the configuration that is actually loaded, never a half-edited `firewall.conf`.
+- **Installer**
+  - Other firewalls (firewalld, ufw, ...) are disabled only *after* binadit-firewall is installed and its configuration validated, right before it starts. A failed install no longer leaves the server without any firewall. `netfilter-persistent` is handled too.
+  - Without a terminal (Ansible, cloud-init, CI) the installer no longer aborts at its first question; it runs unattended.
+  - Re-running the installer on an existing installation keeps your ports. The port review is optional and pre-selects what your configuration already opens (previously pressing Enter replaced `TCP_PORTS`/`UDP_PORTS` with a default selection).
+  - Services listening on localhost only are no longer offered to be opened. SSH is no longer shown as a toggle that had no effect.
+  - Entered addresses are validated. "Installation complete" is only reported when the firewall is really running.
+  - Works on bash 4.2 (CentOS 7). No packages are installed when a backend is already present.
+- **Uninstall** unmasks the firewalls the installer disabled, removes timers/cron jobs and boot links, and states clearly that the server has no firewall afterwards.
+- **systemd unit**: rules are loaded before the network is brought up (`Before=network-pre.target`).
+- **nftables NAT** lives in its own `ip binadit_nat` table and matches interfaces by name, so it loads on older kernels and before the interfaces exist.
+- `config set/add/remove` validate the result and refuse changes that would break the configuration; multi-line values (`PORT_IP_RULES`) are replaced correctly; values containing `/` or `&` no longer corrupt the file.
+- `configtest` validates everything it previously skipped: all IPv6 lists, ranges, rates, interface names, port-forward targets. Mistyped IPs such as `300.1.1.1` are no longer accepted as "hostnames". It warns about settings that have no effect (`SMTP_ENABLE="false"`, `TCP_PORTS_OUTPUT`).
+- `config show` shows every setting.
+- Login/prompt indicators check for binadit-firewall's own rules (they reported "active" when *any* nftables chain existed, e.g. Docker's) and work for non-root admins.
+- The setup wizard no longer opens ports 80/443 when you answer "no".
+
+### Fixed
+- nftables: port ranges (`8000:9000`) made the whole ruleset fail to load.
+- nftables: a NAT interface that did not exist yet (boot) made the whole ruleset fail to load.
+- Configs from older versions that lack newer keys crashed with "unbound variable" (on iptables half-way through applying).
+- iptables: `PORT_IP_RULES`, trusted/blocked ranges and SSH rules for IPv6; `CONN_RATE_PER_IP` above 20 made rule loading fail.
+- iptables: changed rate limits only took effect after a reboot (the kernel kept the old limiter).
+- v1.x migration failed on values containing a `/` (CIDR) and could overwrite an existing new configuration.
+- `update` left its temporary directory behind; `configtest` exited without a summary on the first invalid value.
+
+### Deprecated
+- `TCP_PORTS_OUTPUT` (never had an effect since 3.0) and `SMTP_ENABLE`. Both are still accepted; `configtest` explains what to use instead.
+
 ## [3.0.3] - 2026-02-08
 
 ### Fixed

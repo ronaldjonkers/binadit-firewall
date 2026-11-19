@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests (unprivileged)
+        run: bash tests/test_firewall.sh
+      - name: Unit tests (root, includes config set/add/remove)
+        run: sudo bash tests/test_firewall.sh
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install firewall backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables iptables
+      - name: Integration tests (nftables + iptables, real connections)
+        run: sudo bash tests/test_integration.sh

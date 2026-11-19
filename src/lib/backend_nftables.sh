@@ -3,419 +3,361 @@
 # binadit-firewall - nftables backend implementation
 # =============================================================================
 # All firewall operations using native nftables (nft) commands.
+#
+# The complete ruleset is generated into one file and loaded in a single
+# transaction: either the new rules are fully active, or (on any error) the
+# previous rules stay untouched. There is never a moment without a firewall.
 # =============================================================================
 
 readonly NFT_TABLE_NAME="binadit"
+readonly NFT_NAT_TABLE_NAME="binadit_nat"
 
-# Flush all nftables rules managed by binadit
-nft_flush() {
-    log_info "Flushing nftables rules..."
-    nft delete table inet "$NFT_TABLE_NAME" 2>/dev/null || true
-    log_success "nftables rules flushed"
+# Match for "first packet of a new TCP connection"
+readonly NFT_SYN='tcp flags & (fin | syn | rst | ack) == syn'
+
+# Convert a config port list ("80 443 8000:9000") to an nft set body
+# ("80, 443, 8000-9000"), removing duplicates.
+_nft_port_set() {
+    local out="" p seen=" "
+    for p in "$@"; do
+        p="${p/:/-}"
+        [[ "$seen" == *" $p "* ]] && continue
+        seen+="$p "
+        out+="${out:+, }$p"
+    done
+    echo "$out"
 }
 
-# Build and apply the nftables ruleset from config
-nft_apply() {
-    local config_file="$1"
-    local ssh_port
-    ssh_port=$(detect_ssh_port)
-
-    # Source config
-    # shellcheck source=/dev/null
-    source "$config_file"
-
-    log_info "Building nftables ruleset..."
-
-    # Start building the ruleset
-    local ruleset=""
-    ruleset+="#!/usr/sbin/nft -f\n"
-    ruleset+="\n"
-    ruleset+="# binadit-firewall v${BINADIT_VERSION} - Generated $(date '+%Y-%m-%d %H:%M:%S')\n"
-    ruleset+="# Do not edit manually - managed by binadit-firewall\n"
-    ruleset+="\n"
-
-    # Table will be deleted before applying (handled in shell, not in nft file)
-
-    # Create table
-    ruleset+="table inet ${NFT_TABLE_NAME} {\n"
-
-    # --- Blacklist set ---
-    ruleset+="    set blacklist_v4 {\n"
-    ruleset+="        type ipv4_addr\n"
-    ruleset+="        flags interval\n"
-    local bl_elements=""
-    for ip in $BLACKLIST; do
-        [[ -n "$bl_elements" ]] && bl_elements+=", "
-        bl_elements+="$ip"
-    done
-    if [[ -n "$bl_elements" ]]; then
-        ruleset+="        elements = { ${bl_elements} }\n"
+# Emit a named interval set
+_nft_emit_set() {
+    local name="$1" type="$2"
+    shift 2
+    echo "    set ${name} {"
+    echo "        type ${type}"
+    echo "        flags interval"
+    echo "        auto-merge"
+    if (( $# > 0 )); then
+        echo "        elements = { $(join_comma "$@") }"
     fi
-    ruleset+="    }\n\n"
+    echo "    }"
+    echo ""
+}
 
-    ruleset+="    set blacklist_v6 {\n"
-    ruleset+="        type ipv6_addr\n"
-    ruleset+="        flags interval\n"
-    local bl6_elements=""
-    for ip in $BLACKLIST_IPV6; do
-        [[ -n "$bl6_elements" ]] && bl6_elements+=", "
-        bl6_elements+="$ip"
-    done
-    if [[ -n "$bl6_elements" ]]; then
-        ruleset+="        elements = { ${bl6_elements} }\n"
-    fi
-    ruleset+="    }\n\n"
+# Print the complete ruleset for the loaded configuration.
+# Requires: load_config and resolve_config_hosts have run.
+nft_build_ruleset() {
+    local T="$NFT_TABLE_NAME" N="$NFT_NAT_TABLE_NAME"
+    local ssh_set tcp_set udp_set line p a
 
-    # --- DMZ / Trusted set ---
-    ruleset+="    set trusted_v4 {\n"
-    ruleset+="        type ipv4_addr\n"
-    ruleset+="        flags interval\n"
-    local dmz_elements=""
-    for entry in $TRUSTED_IPS; do
-        local resolved
-        resolved=$(resolve_hostname "$entry" 2>/dev/null) || continue
-        [[ -n "$dmz_elements" ]] && dmz_elements+=", "
-        dmz_elements+="$resolved"
-    done
-    if [[ -n "$dmz_elements" ]]; then
-        ruleset+="        elements = { ${dmz_elements} }\n"
-    fi
-    ruleset+="    }\n\n"
+    ssh_set=$(_nft_port_set $SSH_PORTS)
 
-    ruleset+="    set trusted_v6 {\n"
-    ruleset+="        type ipv6_addr\n"
-    ruleset+="        flags interval\n"
-    local dmz6_elements=""
-    for ip in $TRUSTED_IPS_IPV6; do
-        [[ -n "$dmz6_elements" ]] && dmz6_elements+=", "
-        dmz6_elements+="$ip"
-    done
-    if [[ -n "$dmz6_elements" ]]; then
-        ruleset+="        elements = { ${dmz6_elements} }\n"
-    fi
-    ruleset+="    }\n\n"
+    echo "#!/usr/sbin/nft -f"
+    echo "# binadit-firewall v${BINADIT_VERSION} - generated $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "# Do not edit manually - managed by binadit-firewall"
+    echo ""
+    echo "# Replace our tables in one atomic transaction"
+    echo "table inet ${T}"
+    echo "delete table inet ${T}"
+    echo "table ip ${N}"
+    echo "delete table ip ${N}"
+    echo ""
+    echo "table inet ${T} {"
 
-    # --- INPUT chain ---
-    ruleset+="    chain input {\n"
-    ruleset+="        type filter hook input priority 0; policy drop;\n"
-    ruleset+="\n"
-    ruleset+="        # Loopback\n"
-    ruleset+="        iif lo accept\n"
-    ruleset+="\n"
-    ruleset+="        # Connection tracking\n"
-    ruleset+="        ct state established,related accept\n"
-    if [[ "${DROP_INVALID:-true}" == "true" ]]; then
-        ruleset+="        ct state invalid drop\n"
-    fi
-    ruleset+="\n"
-    ruleset+="        # Blacklists\n"
-    ruleset+="        ip saddr @blacklist_v4 drop\n"
-    ruleset+="        ip6 saddr @blacklist_v6 drop\n"
-    ruleset+="\n"
+    # ---- Address sets -------------------------------------------------------
+    collect_addrs $BLACKLIST $BLACKLIST_IPV6 $BLOCKED_RANGES $BLOCKED_RANGES_IPV6
+    _nft_emit_set blacklist_v4 ipv4_addr ${ADDR4[@]+"${ADDR4[@]}"}
+    _nft_emit_set blacklist_v6 ipv6_addr ${ADDR6[@]+"${ADDR6[@]}"}
 
-    # Blocked port ranges
-    if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
-        for port in $BLOCKED_TCP_PORTS; do
-            ruleset+="        tcp dport ${port} drop\n"
-        done
-    fi
-    if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
-        for port in $BLOCKED_UDP_PORTS; do
-            ruleset+="        udp dport ${port} drop\n"
-        done
+    collect_addrs $TRUSTED_IPS $TRUSTED_IPS_IPV6 $TRUSTED_RANGES $TRUSTED_RANGES_IPV6
+    _nft_emit_set trusted_v4 ipv4_addr ${ADDR4[@]+"${ADDR4[@]}"}
+    _nft_emit_set trusted_v6 ipv6_addr ${ADDR6[@]+"${ADDR6[@]}"}
+
+    collect_addrs $SSH_ALLOWED_IPS $SSH_ALLOWED_IPS_IPV6
+    _nft_emit_set ssh_allowed_v4 ipv4_addr ${ADDR4[@]+"${ADDR4[@]}"}
+    _nft_emit_set ssh_allowed_v6 ipv6_addr ${ADDR6[@]+"${ADDR6[@]}"}
+
+    # ---- INPUT --------------------------------------------------------------
+    echo "    chain input {"
+    echo "        type filter hook input priority 0; policy drop;"
+    echo ""
+    echo "        # Loopback"
+    echo "        iif lo accept"
+    echo ""
+    echo "        # Blacklist: blocked completely, including existing connections"
+    echo "        ip saddr @blacklist_v4 drop"
+    echo "        ip6 saddr @blacklist_v6 drop"
+    echo ""
+    echo "        # Connection tracking"
+    echo "        ct state established,related accept"
+    if [[ "$DROP_INVALID" == "true" ]]; then
+        echo "        ct state invalid drop"
     fi
 
-    ruleset+="\n"
-    ruleset+="        # Trusted IPs - full access\n"
-    ruleset+="        ip saddr @trusted_v4 accept\n"
-    ruleset+="        ip6 saddr @trusted_v6 accept\n"
-    ruleset+="\n"
-
-    # Trusted IP ranges
-    if [[ -n "${TRUSTED_RANGES:-}" ]]; then
-        for range in $TRUSTED_RANGES; do
-            ruleset+="        ip saddr ${range} accept\n"
-        done
+    if [[ -n "${BLOCKED_TCP_PORTS// /}" ]]; then
+        echo ""
+        echo "        # Blocked TCP ports (override everything below, including trusted IPs)"
+        echo "        tcp dport { $(_nft_port_set $BLOCKED_TCP_PORTS) } drop"
     fi
-    if [[ -n "${TRUSTED_RANGES_IPV6:-}" ]]; then
-        for range in $TRUSTED_RANGES_IPV6; do
-            ruleset+="        ip6 saddr ${range} accept\n"
-        done
+    if [[ -n "${BLOCKED_UDP_PORTS// /}" ]]; then
+        echo ""
+        echo "        # Blocked UDP ports"
+        echo "        udp dport { $(_nft_port_set $BLOCKED_UDP_PORTS) } drop"
     fi
 
-    # Blocked ranges
-    if [[ -n "${BLOCKED_RANGES:-}" ]]; then
-        for range in $BLOCKED_RANGES; do
-            ruleset+="        ip saddr ${range} drop\n"
-        done
-    fi
-    if [[ -n "${BLOCKED_RANGES_IPV6:-}" ]]; then
-        for range in $BLOCKED_RANGES_IPV6; do
-            ruleset+="        ip6 saddr ${range} drop\n"
-        done
-    fi
+    echo ""
+    echo "        # Trusted IPs - full access, exempt from all limits"
+    echo "        ip saddr @trusted_v4 accept"
+    echo "        ip6 saddr @trusted_v6 accept"
+    echo ""
+    echo "        # ICMPv6 that IPv6 cannot work without (never blocked)"
+    echo "        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept"
+    echo "        # DHCPv6 replies to this host"
+    echo "        ip6 saddr fe80::/10 udp dport 546 accept"
 
-    ruleset+="\n"
-
-    # SSH access — ALWAYS ensure SSH is reachable to prevent lockout
-    if [[ -n "${SSH_ALLOWED_IPS:-}" ]]; then
-        ruleset+="        # SSH access (restricted to specific IPs)\n"
-        for ip in $SSH_ALLOWED_IPS; do
-            local resolved
-            resolved=$(resolve_hostname "$ip" 2>/dev/null) || continue
-            ruleset+="        ip saddr ${resolved} tcp dport ${ssh_port} accept\n"
-        done
-    elif [[ -z "${TCP_PORTS:-}" ]] || [[ " ${TCP_PORTS} " != *" ${ssh_port} "* ]]; then
-        # SSH port not in TCP_PORTS and no restriction — open SSH to all
-        ruleset+="        # SSH access (open — not in TCP_PORTS)\n"
-        ruleset+="        tcp dport ${ssh_port} accept\n"
-    fi
-    if [[ -n "${SSH_ALLOWED_IPS_IPV6:-}" ]]; then
-        for ip in $SSH_ALLOWED_IPS_IPV6; do
-            ruleset+="        ip6 saddr ${ip} tcp dport ${ssh_port} accept\n"
-        done
+    if ssh_is_restricted; then
+        echo ""
+        echo "        # SSH allow-list (accepted before any rate limit: admins are never throttled)"
+        echo "        ip saddr @ssh_allowed_v4 tcp dport { ${ssh_set} } accept"
+        echo "        ip6 saddr @ssh_allowed_v6 tcp dport { ${ssh_set} } accept"
     fi
 
-    # Port-specific IP restrictions
-    if [[ -n "${PORT_IP_RULES:-}" ]]; then
-        ruleset+="\n        # Port-specific IP access rules\n"
-        local IFS_OLD="$IFS"
-        IFS=$'\n'
-        for rule in $PORT_IP_RULES; do
-            IFS="$IFS_OLD"
-            local proto port_num ip_addr
-            proto=$(echo "$rule" | awk -F'|' '{print $1}' | xargs)
-            port_num=$(echo "$rule" | awk -F'|' '{print $2}' | xargs)
-            ip_addr=$(echo "$rule" | awk -F'|' '{print $3}' | xargs)
-            if [[ -n "$proto" && -n "$port_num" && -n "$ip_addr" ]]; then
-                local resolved
-                resolved=$(resolve_hostname "$ip_addr" 2>/dev/null) || resolved="$ip_addr"
-                if is_valid_ipv6 "$resolved"; then
-                    ruleset+="        ip6 saddr ${resolved} ${proto} dport ${port_num} accept\n"
-                else
-                    ruleset+="        ip saddr ${resolved} ${proto} dport ${port_num} accept\n"
-                fi
-            fi
-            IFS=$'\n'
-        done
-        IFS="$IFS_OLD"
+    if [[ "$SYN_FLOOD_PROTECT" == "true" ]]; then
+        echo ""
+        echo "        # SYN flood protection: drop TCP packets with impossible flag combinations"
+        echo "        # (kernel SYN cookies are enabled separately)"
+        echo "        tcp flags & (fin | syn) == fin | syn drop"
+        echo "        tcp flags & (syn | rst) == syn | rst drop"
+        echo "        tcp flags & (fin | syn | rst | psh | ack | urg) == 0x0 drop"
     fi
 
-    # TCP ports (bidirectional)
-    if [[ -n "${TCP_PORTS:-}" ]]; then
-        local tcp_list
-        tcp_list=$(echo "$TCP_PORTS" | tr ' ' ',')
-        ruleset+="\n        # Open TCP ports\n"
-        ruleset+="        tcp dport { ${tcp_list} } accept\n"
+    if [[ "$CONN_LIMIT_ENABLE" == "true" ]]; then
+        echo ""
+        echo "        # Max concurrent TCP connections per source IP (IPv6: per /64)"
+        echo "        ${NFT_SYN} meter connlimit_v4 size 65535 { ip saddr ct count over ${CONN_LIMIT_PER_IP} } drop"
+        echo "        ${NFT_SYN} meter connlimit_v6 size 65535 { ip6 saddr & ffff:ffff:ffff:ffff:: ct count over ${CONN_LIMIT_PER_IP} } drop"
     fi
 
-    # TCP input-only ports
-    if [[ -n "${TCP_PORTS_INPUT:-}" ]]; then
-        local tcp_in_list
-        tcp_in_list=$(echo "$TCP_PORTS_INPUT" | tr ' ' ',')
-        ruleset+="        tcp dport { ${tcp_in_list} } accept\n"
+    if [[ "${CONN_RATE_PER_IP:-0}" =~ ^[0-9]+$ ]] && (( 10#${CONN_RATE_PER_IP:-0} > 0 )); then
+        local cr=$((10#$CONN_RATE_PER_IP))
+        echo ""
+        echo "        # Hard cap: new TCP connections per second per source IP"
+        echo "        ${NFT_SYN} meter connrate_v4 size 65535 { ip saddr timeout 60s limit rate over ${cr}/second burst ${cr} packets } drop"
+        echo "        ${NFT_SYN} meter connrate_v6 size 65535 { ip6 saddr & ffff:ffff:ffff:ffff:: timeout 60s limit rate over ${cr}/second burst ${cr} packets } drop"
     fi
 
-    # UDP ports
-    if [[ -n "${UDP_PORTS:-}" ]]; then
-        local udp_list
-        udp_list=$(echo "$UDP_PORTS" | tr ' ' ',')
-        ruleset+="\n        # Open UDP ports\n"
-        ruleset+="        udp dport { ${udp_list} } accept\n"
+    if [[ "$RATE_LIMIT_ENABLE" == "true" ]]; then
+        local rate="$RATE_LIMIT_RATE"
+        [[ "$rate" == */* ]] || rate="${rate}/second"
+        echo ""
+        echo "        # Rate limit: new TCP connections per source IP, with burst allowance"
+        echo "        ${NFT_SYN} meter ratelimit_v4 size 65535 { ip saddr timeout 60s limit rate over ${rate} burst ${RATE_LIMIT_BURST} packets } drop"
+        echo "        ${NFT_SYN} meter ratelimit_v6 size 65535 { ip6 saddr & ffff:ffff:ffff:ffff:: timeout 60s limit rate over ${rate} burst ${RATE_LIMIT_BURST} packets } drop"
     fi
 
-    # ICMP
-    if [[ "${ICMP_ENABLE:-true}" == "true" ]]; then
-        ruleset+="\n        # ICMP (IPv4)\n"
-        ruleset+="        ip protocol icmp icmp type { echo-reply, destination-unreachable, echo-request, time-exceeded, parameter-problem } accept\n"
-        ruleset+="\n        # ICMPv6 (required for IPv6 to function)\n"
-        ruleset+="        ip6 nexthdr icmpv6 icmpv6 type { echo-reply, echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n"
-    else
-        ruleset+="\n        # ICMP disabled — drop ping but allow essential ICMPv6 for IPv6\n"
-        ruleset+="        ip protocol icmp drop\n"
-        ruleset+="        ip6 nexthdr icmpv6 icmpv6 type { echo-request, echo-reply } drop\n"
-        ruleset+="        ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n"
-    fi
-
-    # Multicast
-    if [[ "${MULTICAST_ENABLE:-false}" == "true" ]]; then
-        ruleset+="\n        # Multicast\n"
-        ruleset+="        pkttype multicast accept\n"
-        ruleset+="        pkttype broadcast accept\n"
-        ruleset+="        ip daddr 224.0.0.0/4 accept\n"
-        ruleset+="        ip6 daddr ff00::/8 accept\n"
-    fi
-
-    # SYN flood protection
-    if [[ "${SYN_FLOOD_PROTECT:-true}" == "true" ]]; then
-        ruleset+="\n        # SYN flood protection\n"
-        ruleset+="        tcp flags syn limit rate 1/second burst 3 packets accept\n"
-    fi
-
-    # Connection limit per IP
-    if [[ "${CONN_LIMIT_ENABLE:-false}" == "true" ]]; then
-        local conn_limit="${CONN_LIMIT_PER_IP:-50}"
-        ruleset+="\n        # Connection limit per IP\n"
-        ruleset+="        ct state new tcp flags syn ct count over ${conn_limit} drop\n"
-    fi
-
-    # Block common attack ports
-    if [[ "${BLOCK_COMMON_ATTACKS:-true}" == "true" ]]; then
-        ruleset+="\n        # Block common attack ports\n"
-        ruleset+="        tcp dport { 23, 135, 137-139, 445, 1900 } drop\n"
-        ruleset+="        udp dport { 23, 135, 137-139, 445, 1900 } drop\n"
-    fi
-
-    # Rate limiting (DDoS protection)
-    if [[ "${RATE_LIMIT_ENABLE:-true}" == "true" ]]; then
-        local rate="${RATE_LIMIT_RATE:-25}"
-        # Ensure rate has a unit (nft requires e.g. "25/second")
-        [[ "$rate" =~ / ]] || rate="${rate}/second"
-        local burst="${RATE_LIMIT_BURST:-100}"
-        ruleset+="\n        # Rate limiting for new connections\n"
-        ruleset+="        ct state new limit rate ${rate} burst ${burst} packets accept\n"
-    fi
-
-    # Logging
-    if [[ "${LOG_DROPPED:-true}" == "true" ]]; then
-        ruleset+="\n        # Log dropped packets\n"
-        ruleset+="        limit rate 5/minute burst 10 packets log prefix \"binadit-drop: \" level warn\n"
-    fi
-
-    ruleset+="    }\n\n"
-
-    # --- OUTPUT chain ---
-    # Default: allow all outgoing — firewall primarily protects inbound
-    ruleset+="    chain output {\n"
-    ruleset+="        type filter hook output priority 0; policy accept;\n"
-
-    # Blocked ports (output)
-    if [[ -n "${BLOCKED_TCP_PORTS:-}" ]]; then
-        ruleset+="\n        # Blocked TCP ports (both directions)\n"
-        for port in $BLOCKED_TCP_PORTS; do
-            ruleset+="        tcp dport ${port} drop\n"
-        done
-    fi
-    if [[ -n "${BLOCKED_UDP_PORTS:-}" ]]; then
-        ruleset+="\n        # Blocked UDP ports (both directions)\n"
-        for port in $BLOCKED_UDP_PORTS; do
-            ruleset+="        udp dport ${port} drop\n"
-        done
-    fi
-    if [[ -n "${BLOCKED_TCP_PORTS_OUTPUT:-}" ]]; then
-        ruleset+="\n        # Blocked outgoing TCP ports\n"
-        for port in $BLOCKED_TCP_PORTS_OUTPUT; do
-            ruleset+="        tcp dport ${port} drop\n"
-        done
-    fi
-    if [[ -n "${BLOCKED_UDP_PORTS_OUTPUT:-}" ]]; then
-        ruleset+="\n        # Blocked outgoing UDP ports\n"
-        for port in $BLOCKED_UDP_PORTS_OUTPUT; do
-            ruleset+="        udp dport ${port} drop\n"
-        done
-    fi
-
-    ruleset+="    }\n\n"
-
-    # --- FORWARD chain ---
-    ruleset+="    chain forward {\n"
-    ruleset+="        type filter hook forward priority 0; policy drop;\n"
-
-    if [[ "${NAT_ENABLE:-false}" == "true" ]]; then
-        ruleset+="\n        # NAT forwarding\n"
-        ruleset+="        ct state established,related accept\n"
-        local iface="${NAT_INTERNAL_IFACE:-eth1}"
-        ruleset+="        iif ${iface} accept\n"
-        ruleset+="        oif ${iface} accept\n"
-    fi
-
-    ruleset+="    }\n"
-
-    # --- NAT table ---
-    if [[ "${NAT_ENABLE:-false}" == "true" ]]; then
-        local ext_iface="${NAT_EXTERNAL_IFACE:-eth0}"
-
-        # Port forwarding (DNAT)
-        if [[ -n "${PORT_FORWARD_RULES:-}" ]]; then
-            ruleset+="\n    chain prerouting {\n"
-            ruleset+="        type nat hook prerouting priority -100;\n"
-            local IFS_OLD="$IFS"
-            IFS=$'\n'
-            for rule in $PORT_FORWARD_RULES; do
-                IFS="$IFS_OLD"
-                local proto ext_port int_dest
-                proto=$(echo "$rule" | awk -F'|' '{print $1}' | xargs)
-                ext_port=$(echo "$rule" | awk -F'|' '{print $2}' | xargs)
-                int_dest=$(echo "$rule" | awk -F'|' '{print $3}' | xargs)
-                if [[ -n "$proto" && -n "$ext_port" && -n "$int_dest" ]]; then
-                    ruleset+="        ${proto} dport ${ext_port} dnat to ${int_dest}\n"
-                fi
-                IFS=$'\n'
+    if [[ -n "${PORT_IP_RULES// /}" ]]; then
+        echo ""
+        echo "        # Port-specific IP access rules"
+        while IFS= read -r line; do
+            [[ -z "${line// /}" ]] && continue
+            split_rule "$line"
+            [[ -n "$R1" && -n "$R2" && -n "$R3" ]] || continue
+            collect_addrs "$R3"
+            for a in ${ADDR4[@]+"${ADDR4[@]}"}; do
+                echo "        ip saddr ${a} ${R1} dport ${R2/:/-} accept"
             done
-            IFS="$IFS_OLD"
-            ruleset+="    }\n"
-        fi
-
-        ruleset+="\n    chain postrouting {\n"
-        ruleset+="        type nat hook postrouting priority 100;\n"
-        ruleset+="        oif ${ext_iface} masquerade\n"
-        ruleset+="    }\n"
+            for a in ${ADDR6[@]+"${ADDR6[@]}"}; do
+                echo "        ip6 saddr ${a} ${R1} dport ${R2/:/-} accept"
+            done
+        done <<< "$PORT_IP_RULES"
     fi
 
-    ruleset+="}\n"
-
-    # Write and apply
-    local rules_file="/etc/binadit-firewall/rules.nft"
-    mkdir -p /etc/binadit-firewall
-    echo -e "$ruleset" > "$rules_file"
-
-    # Apply with nft
-    # We need to handle the delete separately since it may fail if table doesn't exist
-    nft delete table inet "$NFT_TABLE_NAME" 2>/dev/null || true
-
-    # Apply the ruleset (skip comments and empty lines for nft)
-    local apply_file
-    apply_file=$(mktemp)
-    grep -v "^#" "$rules_file" | grep -v "^$" > "$apply_file" || true
-
-    local nft_output
-    if nft_output=$(nft -f "$apply_file" 2>&1); then
-        log_success "nftables rules applied successfully"
+    echo ""
+    if ssh_is_restricted; then
+        echo "        # SSH is restricted: everyone not accepted above is refused,"
+        echo "        # even when the SSH port is also listed in TCP_PORTS"
+        echo "        tcp dport { ${ssh_set} } drop"
     else
-        log_error "Failed to apply nftables rules:"
-        echo "$nft_output" | while IFS= read -r line; do
+        echo "        # SSH: always reachable (prevents lockout)"
+        echo "        tcp dport { ${ssh_set} } accept"
+    fi
+
+    tcp_set=$(_nft_port_set $(public_tcp_ports))
+    if [[ -n "$tcp_set" ]]; then
+        echo ""
+        echo "        # Open TCP ports"
+        echo "        tcp dport { ${tcp_set} } accept"
+    fi
+    udp_set=$(_nft_port_set $UDP_PORTS)
+    if [[ -n "$udp_set" ]]; then
+        echo ""
+        echo "        # Open UDP ports"
+        echo "        udp dport { ${udp_set} } accept"
+    fi
+
+    echo ""
+    if [[ "$ICMP_ENABLE" == "true" ]]; then
+        echo "        # Ping"
+        echo "        icmp type echo-request accept"
+        echo "        icmpv6 type echo-request accept"
+    else
+        echo "        # Ping disabled"
+        echo "        icmp type echo-request drop"
+        echo "        icmpv6 type echo-request drop"
+    fi
+
+    if [[ "$MULTICAST_ENABLE" == "true" ]]; then
+        echo ""
+        echo "        # Multicast / broadcast"
+        echo "        meta pkttype { multicast, broadcast } accept"
+        echo "        ip daddr 224.0.0.0/4 accept"
+        echo "        ip6 daddr ff00::/8 accept"
+    fi
+
+    if [[ "$BLOCK_COMMON_ATTACKS" == "true" ]]; then
+        echo ""
+        echo "        # Common attack ports: dropped silently (kept out of the log)"
+        echo "        tcp dport { 23, 135, 137-139, 445, 1900 } drop"
+        echo "        udp dport { 23, 135, 137-139, 445, 1900 } drop"
+    fi
+
+    if [[ "$LOG_DROPPED" == "true" ]]; then
+        echo ""
+        echo "        # Log what is about to be dropped by the chain policy"
+        echo "        limit rate 5/minute burst 10 packets log prefix \"binadit-drop: \" level warn"
+    fi
+    echo "    }"
+    echo ""
+
+    # ---- OUTPUT -------------------------------------------------------------
+    echo "    chain output {"
+    echo "        type filter hook output priority 0; policy accept;"
+    echo ""
+    echo "        oif lo accept"
+    echo "        ip daddr @blacklist_v4 drop"
+    echo "        ip6 daddr @blacklist_v6 drop"
+    tcp_set=$(_nft_port_set $BLOCKED_TCP_PORTS $BLOCKED_TCP_PORTS_OUTPUT)
+    if [[ -n "$tcp_set" ]]; then
+        echo "        # Blocked outgoing TCP ports"
+        echo "        tcp dport { ${tcp_set} } drop"
+    fi
+    udp_set=$(_nft_port_set $BLOCKED_UDP_PORTS $BLOCKED_UDP_PORTS_OUTPUT)
+    if [[ -n "$udp_set" ]]; then
+        echo "        # Blocked outgoing UDP ports"
+        echo "        udp dport { ${udp_set} } drop"
+    fi
+    echo "    }"
+    echo ""
+
+    # ---- FORWARD ------------------------------------------------------------
+    echo "    chain forward {"
+    echo "        type filter hook forward priority 0; policy drop;"
+    if [[ "$NAT_ENABLE" == "true" ]]; then
+        echo ""
+        echo "        ip saddr @blacklist_v4 drop"
+        echo "        ip daddr @blacklist_v4 drop"
+        echo "        ct state established,related accept"
+        if [[ "$DROP_INVALID" == "true" ]]; then
+            echo "        ct state invalid drop"
+        fi
+        echo "        # LAN -> anywhere"
+        echo "        iifname \"${NAT_INTERNAL_IFACE}\" accept"
+        echo "        # Port forwards (DNAT) -> LAN"
+        echo "        ct status dnat accept"
+    fi
+    echo "    }"
+    echo "}"
+
+    # ---- NAT (separate IPv4 table: works on every kernel) -------------------
+    if [[ "$NAT_ENABLE" == "true" ]]; then
+        echo ""
+        echo "table ip ${N} {"
+        echo "    chain prerouting {"
+        echo "        type nat hook prerouting priority -100; policy accept;"
+        while IFS= read -r line; do
+            [[ -z "${line// /}" ]] && continue
+            split_rule "$line"
+            [[ -n "$R1" && -n "$R2" && -n "$R3" ]] || continue
+            echo "        iifname \"${NAT_EXTERNAL_IFACE}\" ${R1} dport ${R2/:/-} dnat to ${R3}"
+        done <<< "${PORT_FORWARD_RULES:-}"
+        echo "    }"
+        echo ""
+        echo "    chain postrouting {"
+        echo "        type nat hook postrouting priority 100; policy accept;"
+        echo "        oifname \"${NAT_EXTERNAL_IFACE}\" masquerade"
+        echo "    }"
+        echo "}"
+    fi
+}
+
+# Generate the ruleset and verify it with the kernel without applying it.
+# Prints errors; returns 1 when the ruleset would not load.
+nft_check() {
+    local rules_file="$1" out
+    nft_build_ruleset > "$rules_file"
+    if ! out=$(nft -c -f "$rules_file" 2>&1); then
+        log_error "The generated nftables ruleset is not valid:"
+        while IFS= read -r line; do
             log_error "  $line"
-        done
-        log_info "Ruleset saved to: $rules_file"
-        rm -f "$apply_file"
+        done <<< "$out"
         return 1
     fi
-    rm -f "$apply_file"
+    return 0
+}
 
-    # Custom rules file (nft format, appended after main ruleset)
+# Build and atomically apply the ruleset.
+# Requires: load_config and resolve_config_hosts have run.
+nft_apply() {
+    local rules_file="${CONFIG_DIR}/rules.nft"
+    local new_file="${rules_file}.new"
+    mkdir -p "$CONFIG_DIR"
+
+    log_info "Building nftables ruleset..."
+    if ! nft_check "$new_file"; then
+        log_error "Firewall rules were NOT changed (ruleset kept in ${new_file})"
+        return 1
+    fi
+
+    local out
+    if ! out=$(nft -f "$new_file" 2>&1); then
+        log_error "Failed to apply nftables rules (previous rules are still active):"
+        while IFS= read -r line; do
+            log_error "  $line"
+        done <<< "$out"
+        return 1
+    fi
+    mv -f "$new_file" "$rules_file"
+    log_success "nftables rules applied"
+
+    # Custom rules file (nft syntax, loaded after the managed ruleset)
     if [[ -n "${CUSTOM_RULES_FILE:-}" ]] && [[ -f "${CUSTOM_RULES_FILE}" ]]; then
         log_info "Loading custom rules from ${CUSTOM_RULES_FILE}..."
-        if nft -f "${CUSTOM_RULES_FILE}" 2>/dev/null; then
+        if out=$(nft -f "${CUSTOM_RULES_FILE}" 2>&1); then
             log_success "Custom rules loaded"
         else
-            log_warn "Failed to load custom rules from ${CUSTOM_RULES_FILE}"
+            log_warn "Failed to load custom rules from ${CUSTOM_RULES_FILE}:"
+            while IFS= read -r line; do
+                log_warn "  $line"
+            done <<< "$out"
         fi
     fi
+    return 0
+}
 
-    # Enable IP forwarding if NAT is enabled
-    if [[ "${NAT_ENABLE:-false}" == "true" ]]; then
-        echo 1 > /proc/sys/net/ipv4/ip_forward
-        log_info "IP forwarding enabled"
-    fi
+# Remove all rules managed by binadit-firewall
+nft_flush() {
+    log_info "Removing nftables rules..."
+    nft delete table inet "$NFT_TABLE_NAME" 2>/dev/null || true
+    nft delete table ip "$NFT_NAT_TABLE_NAME" 2>/dev/null || true
+    log_success "nftables rules removed"
+}
+
+# True when our ruleset is loaded
+nft_is_active() {
+    nft list chain inet "$NFT_TABLE_NAME" input &>/dev/null
 }
 
 # Show current nftables status
 nft_status() {
-    log_header "nftables Status (binadit-firewall)"
-    if nft list table inet "$NFT_TABLE_NAME" 2>/dev/null; then
-        return 0
-    else
-        log_warn "No binadit-firewall rules loaded"
-        return 1
-    fi
+    nft list table inet "$NFT_TABLE_NAME" 2>/dev/null || return 1
+    nft list table ip "$NFT_NAT_TABLE_NAME" 2>/dev/null || true
 }

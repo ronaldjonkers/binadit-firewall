@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v2.1.2 - Installer
+# binadit-firewall v3.1.0 - Installer
 # =============================================================================
 # Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
 # License: GPL-2.0
@@ -8,17 +8,28 @@
 # Universal installer for Linux systems.
 # Supports: Debian/Ubuntu, CentOS/RHEL/Rocky/Alma, Fedora, Arch, Alpine, SUSE
 #
-# Features:
-#   - Detects and disables competing firewalls (firewalld, ufw, iptables-services)
-#   - Installs required dependencies (nftables or iptables)
-#   - Sets up systemd service for boot persistence
-#   - Interactive setup wizard for common port configurations
-#   - Idempotent: safe to run multiple times
+# What it does, in this order:
+#   1. Installs a firewall backend if none is present (nftables or iptables)
+#   2. Installs the program files and the boot service
+#   3. Creates the configuration (new installs) or keeps yours (upgrades)
+#   4. Validates the configuration
+#   5. Only then disables competing firewalls (firewalld, ufw, ...) and starts
+#      binadit-firewall — the server is never left without a firewall
 #
-# Usage: sudo bash install.sh [--uninstall] [--non-interactive]
+# Safe to run multiple times.
+#
+# Usage: sudo bash install.sh [--non-interactive] [--uninstall] [--update]
+#   --non-interactive   never ask questions (use defaults, keep existing config)
+#   --uninstall         remove binadit-firewall
+#   --update            only replace program files (used by "binadit-firewall update")
 # =============================================================================
 
 set -euo pipefail
+
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "binadit-firewall requires bash 4 or newer" >&2
+    exit 1
+fi
 
 # Script directory
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,6 +41,8 @@ CONFIG_DIR="/etc/binadit-firewall"
 SYSTEMD_DIR="/etc/systemd/system"
 BACKUP_DIR="${CONFIG_DIR}/backups"
 
+NON_INTERACTIVE="false"
+
 # Source common library for colors and logging
 source "${INSTALLER_DIR}/src/lib/common.sh"
 source "${INSTALLER_DIR}/src/lib/backend.sh"
@@ -38,29 +51,27 @@ source "${INSTALLER_DIR}/src/lib/backend.sh"
 # Helper functions
 # =============================================================================
 
-# Check if a systemd service exists and is active
+has_systemctl() {
+    command -v systemctl &>/dev/null
+}
+
+systemd_running() {
+    has_systemctl && [[ -d /run/systemd/system ]]
+}
+
+# Check if a systemd service is active
 service_is_active() {
-    systemctl is-active "$1" &>/dev/null 2>&1
+    has_systemctl && systemctl is-active "$1" &>/dev/null
 }
 
-# Check if a systemd service exists
+# Check if a systemd unit file really exists
 service_exists() {
-    systemctl list-unit-files "$1.service" &>/dev/null 2>&1
+    has_systemctl || return 1
+    systemctl list-unit-files "$1.service" 2>/dev/null | grep -q "^$1\.service"
 }
 
-# Disable and stop a service
-disable_service() {
-    local svc="$1"
-    if service_exists "$svc"; then
-        if service_is_active "$svc"; then
-            log_info "Stopping $svc..."
-            systemctl stop "$svc" 2>/dev/null || true
-        fi
-        log_info "Disabling $svc..."
-        systemctl disable "$svc" 2>/dev/null || true
-        systemctl mask "$svc" 2>/dev/null || true
-        log_success "$svc disabled and masked"
-    fi
+service_is_enabled() {
+    has_systemctl && systemctl is-enabled "$1" &>/dev/null
 }
 
 # Detect package manager
@@ -102,94 +113,96 @@ install_package() {
         apk)
             apk add "$pkg" ;;
         zypper)
-            zypper install -y "$pkg" ;;
+            zypper --non-interactive install "$pkg" ;;
         *)
             log_error "Unknown package manager. Please install '$pkg' manually."
             return 1 ;;
     esac
 }
 
-# Update package cache
+# Update package cache (failures are not fatal: the install step will tell)
 update_pkg_cache() {
     local pkg_mgr
     pkg_mgr=$(detect_pkg_manager)
 
     case "$pkg_mgr" in
-        apt)    apt-get update -qq ;;
+        apt)    apt-get update -qq || true ;;
         dnf)    dnf makecache -q 2>/dev/null || true ;;
         yum)    yum makecache -q 2>/dev/null || true ;;
-        pacman) pacman -Sy --noconfirm ;;
-        apk)    apk update ;;
-        zypper) zypper refresh -q ;;
+        pacman) pacman -Sy --noconfirm || true ;;
+        apk)    apk update || true ;;
+        zypper) zypper --non-interactive refresh -q || true ;;
     esac
 }
 
 # =============================================================================
-# Disable competing firewalls
+# Competing firewalls
 # =============================================================================
+# Detection (and the question) happens early; the actual disabling happens
+# only when binadit-firewall is installed, configured and validated.
 
-disable_competing_firewalls() {
-    log_header "Checking for competing firewalls"
+COMPETING=()
 
-    local found_competing=false
+check_competing_firewalls() {
+    log_header "Checking for other firewalls"
 
-    # firewalld (RHEL/CentOS/Fedora default)
-    if service_exists "firewalld"; then
-        log_warn "Found firewalld - will disable"
-        found_competing=true
-        if [[ "$NON_INTERACTIVE" != "true" ]]; then
-            read -rp "Disable firewalld? [Y/n]: " disable_fwd
-            if [[ "${disable_fwd,,}" == "n" ]]; then
-                log_error "Cannot install binadit-firewall while firewalld is active"
-                exit 1
-            fi
-        fi
-        disable_service "firewalld"
+    COMPETING=()
+    local svc
+
+    if service_exists "firewalld" && { service_is_active "firewalld" || service_is_enabled "firewalld"; }; then
+        COMPETING+=("firewalld")
     fi
 
-    # ufw (Ubuntu/Debian default)
     if command -v ufw &>/dev/null; then
         local ufw_status
-        ufw_status=$(ufw status 2>/dev/null | head -1 || echo "inactive")
-        if [[ "$ufw_status" == *"active"* ]]; then
-            log_warn "Found ufw (active) - will disable"
-            found_competing=true
-            if [[ "$NON_INTERACTIVE" != "true" ]]; then
-                read -rp "Disable ufw? [Y/n]: " disable_ufw
-                if [[ "${disable_ufw,,}" == "n" ]]; then
-                    log_error "Cannot install binadit-firewall while ufw is active"
-                    exit 1
-                fi
-            fi
-            ufw disable 2>/dev/null || true
-            disable_service "ufw"
+        ufw_status=$(ufw status 2>/dev/null | head -1 || true)
+        if [[ "$ufw_status" == *"Status: active"* ]]; then
+            COMPETING+=("ufw")
         fi
     fi
 
-    # iptables-services (RHEL/CentOS)
-    if service_exists "iptables"; then
-        if service_is_active "iptables"; then
-            log_warn "Found iptables service (active) - will disable"
-            found_competing=true
-            disable_service "iptables"
+    # Services that restore their own saved rules at boot
+    for svc in iptables ip6tables nftables netfilter-persistent; do
+        if service_exists "$svc" && { service_is_active "$svc" || service_is_enabled "$svc"; }; then
+            COMPETING+=("$svc")
         fi
-    fi
-    if service_exists "ip6tables"; then
-        disable_service "ip6tables"
+    done
+
+    if (( ${#COMPETING[@]} == 0 )); then
+        log_success "No other active firewalls found"
+        return 0
     fi
 
-    # nftables system service (we manage nftables ourselves)
-    if service_exists "nftables"; then
-        if service_is_active "nftables"; then
-            log_warn "Found nftables service (active) - will disable (binadit-firewall manages nftables directly)"
-            found_competing=true
-            disable_service "nftables"
-        fi
+    log_warn "Found: ${BOLD}${COMPETING[*]}${NC}"
+    log_info "These will be stopped and disabled right before binadit-firewall starts"
+    local answer
+    ask answer "  Continue? [Y/n]: " "y"
+    if [[ "${answer,,}" == "n" ]]; then
+        log_error "Installation cancelled — nothing was changed"
+        exit 1
     fi
+}
 
-    if [[ "$found_competing" == "false" ]]; then
-        log_success "No competing firewalls found"
-    fi
+disable_competing_firewalls() {
+    (( ${#COMPETING[@]} == 0 )) && return 0
+
+    log_header "Disabling other firewalls"
+    ensure_state_dir || true
+    local record svc
+    record="$(state_dir)/disabled-services"
+
+    for svc in "${COMPETING[@]}"; do
+        if [[ "$svc" == "ufw" ]]; then
+            ufw disable &>/dev/null || true
+        fi
+        if service_exists "$svc"; then
+            systemctl stop "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+            systemctl mask "$svc" 2>/dev/null || true
+        fi
+        grep -qx "$svc" "$record" 2>/dev/null || echo "$svc" >> "$record"
+        log_success "$svc stopped and disabled"
+    done
 }
 
 # =============================================================================
@@ -198,128 +211,108 @@ disable_competing_firewalls() {
 
 # Known port-to-service name mappings
 declare -A PORT_SERVICE_NAMES=(
+    [21]="FTP"
     [22]="SSH"
     [25]="SMTP"
     [53]="DNS"
     [80]="HTTP"
-    [443]="HTTPS"
     [110]="POP3"
     [143]="IMAP"
+    [443]="HTTPS"
     [465]="SMTPS"
     [587]="Mail Submission"
+    [873]="rsync"
     [993]="IMAPS"
     [995]="POP3S"
-    [3306]="MySQL"
-    [5432]="PostgreSQL"
-    [6379]="Redis"
-    [8080]="HTTP Alt"
-    [8443]="HTTPS Alt"
-    [27017]="MongoDB"
-    [9090]="Prometheus"
-    [9100]="Node Exporter"
-    [3000]="Grafana"
-    [9200]="Elasticsearch"
-    [5601]="Kibana"
-    [8888]="HTTP Proxy"
+    [1194]="OpenVPN"
+    [1433]="MSSQL"
+    [1723]="PPTP"
+    [2181]="ZooKeeper"
     [2375]="Docker API"
     [2376]="Docker TLS"
-    [6443]="Kubernetes API"
-    [10250]="Kubelet"
-    [51820]="WireGuard"
-    [1194]="OpenVPN"
-    [1723]="PPTP"
-    [21]="FTP"
-    [873]="rsync"
-    [1433]="MSSQL"
-    [5900]="VNC"
+    [3000]="Grafana"
+    [3306]="MySQL"
     [3389]="RDP"
-    [11211]="Memcached"
-    [5672]="RabbitMQ"
-    [15672]="RabbitMQ Mgmt"
     [4369]="EPMD"
-    [6660]="IRC"
-    [8081]="HTTP Alt"
-    [9092]="Kafka"
-    [2181]="ZooKeeper"
-    [8500]="Consul"
     [4443]="HTTPS Alt"
+    [5432]="PostgreSQL"
+    [5601]="Kibana"
+    [5672]="RabbitMQ"
+    [5900]="VNC"
+    [6379]="Redis"
+    [6443]="Kubernetes API"
+    [6660]="IRC"
+    [8080]="HTTP Alt"
+    [8081]="HTTP Alt"
+    [8443]="HTTPS Alt"
+    [8500]="Consul"
+    [8888]="HTTP Proxy"
+    [9090]="Prometheus"
+    [9092]="Kafka"
+    [9100]="Node Exporter"
+    [9200]="Elasticsearch"
+    [10250]="Kubelet"
+    [11211]="Memcached"
+    [15672]="RabbitMQ Mgmt"
+    [27017]="MongoDB"
+    [51820]="WireGuard"
 )
 
-# Services that are safe to expose by default
-SAFE_DEFAULT_PORTS="22 80 443 53"
+# Ports that are pre-selected on a fresh install
+SAFE_DEFAULT_PORTS="80 443 53"
+
+# Results of detect_running_services
+DET_TCP_PORTS=(); DET_TCP_PROCS=(); DET_UDP_PORTS=(); DET_UDP_PROCS=()
+
+# Parse "ss -lnp" / "netstat -lnp" output: prints "port process" for every
+# listener that is reachable from outside (loopback-only listeners are skipped)
+_parse_listeners() {
+    local line addr port proc
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        addr=$(echo "$line" | awk '{ print $4 }')
+        port="${addr##*:}"
+        addr="${addr%:*}"
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
+        case "$addr" in
+            127.*|"[::1]"|::1|localhost) continue ;;
+        esac
+        proc=$(echo "$line" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p')
+        if [[ -z "$proc" ]]; then
+            # netstat format: last column is "pid/program"
+            proc=$(echo "$line" | awk '{ print $NF }')
+            if [[ "$proc" == */* ]]; then proc="${proc#*/}"; else proc=""; fi
+        fi
+        echo "$port ${proc:-unknown}"
+    done
+}
 
 # Detect running services by scanning listening ports
 detect_running_services() {
-    local -n _tcp_ports=$1
-    local -n _udp_ports=$2
-    local -n _tcp_procs=$3
-    local -n _udp_procs=$4
+    DET_TCP_PORTS=(); DET_TCP_PROCS=(); DET_UDP_PORTS=(); DET_UDP_PROCS=()
+    local tool port proc
 
-    _tcp_ports=()
-    _udp_ports=()
-    _tcp_procs=()
-    _udp_procs=()
-
-    local ss_output
-
-    # TCP listeners
     if command -v ss &>/dev/null; then
-        ss_output=$(ss -tlnp 2>/dev/null | tail -n +2 || true)
+        tool="ss"
     elif command -v netstat &>/dev/null; then
-        ss_output=$(netstat -tlnp 2>/dev/null | tail -n +2 || true)
+        tool="netstat"
     else
         return 1
     fi
 
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        local port proc_name
+    while read -r port proc; do
+        [[ -z "$port" ]] && continue
+        [[ " ${DET_TCP_PORTS[*]:-} " == *" $port "* ]] && continue
+        DET_TCP_PORTS+=("$port"); DET_TCP_PROCS+=("$proc")
+    done < <("$tool" -tlnp 2>/dev/null | tail -n +2 | _parse_listeners)
 
-        # Extract port from Local Address column (format: *:port or 0.0.0.0:port or :::port)
-        port=$(echo "$line" | awk '{print $4}' | rev | cut -d: -f1 | rev)
-        # Extract process name
-        proc_name=$(echo "$line" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || \
-                    echo "$line" | grep -oP '(?<=\/)[^ ]+' 2>/dev/null || \
-                    echo "unknown")
+    while read -r port proc; do
+        [[ -z "$port" ]] && continue
+        [[ " ${DET_UDP_PORTS[*]:-} " == *" $port "* ]] && continue
+        DET_UDP_PORTS+=("$port"); DET_UDP_PROCS+=("$proc")
+    done < <("$tool" -ulnp 2>/dev/null | tail -n +2 | _parse_listeners)
 
-        # Skip non-numeric ports and duplicates
-        [[ ! "$port" =~ ^[0-9]+$ ]] && continue
-        local already=false
-        for existing in "${_tcp_ports[@]+"${_tcp_ports[@]}"}"; do
-            [[ "$existing" == "$port" ]] && already=true && break
-        done
-        [[ "$already" == "true" ]] && continue
-
-        _tcp_ports+=("$port")
-        _tcp_procs+=("$proc_name")
-    done <<< "$ss_output"
-
-    # UDP listeners
-    if command -v ss &>/dev/null; then
-        ss_output=$(ss -ulnp 2>/dev/null | tail -n +2 || true)
-    elif command -v netstat &>/dev/null; then
-        ss_output=$(netstat -ulnp 2>/dev/null | tail -n +2 || true)
-    fi
-
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        local port proc_name
-
-        port=$(echo "$line" | awk '{print $4}' | rev | cut -d: -f1 | rev)
-        proc_name=$(echo "$line" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || \
-                    echo "$line" | grep -oP '(?<=\/)[^ ]+' 2>/dev/null || \
-                    echo "unknown")
-
-        [[ ! "$port" =~ ^[0-9]+$ ]] && continue
-        local already=false
-        for existing in "${_udp_ports[@]+"${_udp_ports[@]}"}"; do
-            [[ "$existing" == "$port" ]] && already=true && break
-        done
-        [[ "$already" == "true" ]] && continue
-
-        _udp_ports+=("$port")
-        _udp_procs+=("$proc_name")
-    done <<< "$ss_output"
+    return 0
 }
 
 # Get a friendly service name for a port
@@ -329,166 +322,130 @@ get_service_name() {
 
     if [[ -n "${PORT_SERVICE_NAMES[$port]+x}" ]]; then
         echo "${PORT_SERVICE_NAMES[$port]}"
-    elif [[ -n "$proc_name" && "$proc_name" != "unknown" ]]; then
+    elif [[ -n "$proc_name" && "$proc_name" != "unknown" && "$proc_name" != "-" ]]; then
         echo "$proc_name"
     else
         echo "Port $port"
     fi
 }
 
-# Interactive service selection menu during install
+# Interactive service selection menu.
+# $1 config file, $2 "fresh" (pre-select safe defaults) or "existing"
+# (pre-select exactly what the config already opens).
 service_selection_menu() {
-    local config_file="$1"
+    local config_file="$1" mode="${2:-fresh}"
 
-    log_header "Detected Running Services"
+    log_header "Which services should be reachable from outside?"
 
-    local tcp_ports=() udp_ports=() tcp_procs=() udp_procs=()
-    if ! detect_running_services tcp_ports udp_ports tcp_procs udp_procs; then
-        log_warn "Could not detect running services (ss/netstat not found)"
-        return 1
-    fi
-
-    local total=$(( ${#tcp_ports[@]} + ${#udp_ports[@]} ))
-    if [[ "$total" -eq 0 ]]; then
-        log_info "No listening services detected"
+    if ! detect_running_services; then
+        log_warn "Could not detect running services (ss/netstat not found) — keeping current port settings"
         return 0
     fi
 
-    # Build the menu items: index, proto, port, process, service_name, enabled
-    local -a menu_proto=() menu_port=() menu_proc=() menu_name=() menu_enabled=()
-    local idx=0
+    load_config "$config_file"
+    local ssh_ports="$SSH_PORTS"
+    local cur_tcp="$TCP_PORTS" cur_udp="$UDP_PORTS"
 
-    # Always include HTTP (80) and HTTPS (443) even if not detected
-    local -a always_tcp_ports=(80 443)
-    for aport in "${always_tcp_ports[@]}"; do
-        local already=false
-        for existing in "${tcp_ports[@]+"${tcp_ports[@]}"}"; do
-            [[ "$existing" == "$aport" ]] && already=true && break
+    local -a menu_proto=() menu_port=() menu_name=() menu_note=() menu_enabled=()
+    local keep_tcp="" keep_udp="" i port proc tok
+
+    _menu_add() {
+        local proto="$1" port="$2" proc="$3" enabled="false" current="$cur_tcp"
+        [[ "$proto" == "UDP" ]] && current="$cur_udp"
+        # SSH is never part of the menu: it is always kept reachable
+        if [[ "$proto" == "TCP" && " $ssh_ports " == *" $port "* ]]; then
+            return 0
+        fi
+        local j
+        for j in "${!menu_port[@]}"; do
+            [[ "${menu_port[$j]}" == "$port" && "${menu_proto[$j]}" == "$proto" ]] && return 0
         done
-        if [[ "$already" == "false" ]]; then
-            tcp_ports+=("$aport")
-            tcp_procs+=("not running")
-        fi
-    done
-
-    for i in "${!tcp_ports[@]}"; do
-        local port="${tcp_ports[$i]}"
-        local proc="${tcp_procs[$i]}"
-        local name
-        name=$(get_service_name "$port" "$proc")
-        menu_proto+=("TCP")
-        menu_port+=("$port")
-        menu_proc+=("$proc")
-        menu_name+=("$name")
-        # Default: enable SSH, HTTP, HTTPS; disable others
-        if [[ " $SAFE_DEFAULT_PORTS " == *" $port "* ]]; then
-            menu_enabled+=("true")
+        if [[ "$mode" == "existing" ]]; then
+            [[ " $current " == *" $port "* ]] && enabled="true"
         else
-            menu_enabled+=("false")
+            [[ "$proto" == "TCP" || "$port" == "53" ]] && [[ " $SAFE_DEFAULT_PORTS " == *" $port "* ]] && enabled="true"
         fi
-        idx=$((idx + 1))
+        menu_proto+=("$proto"); menu_port+=("$port")
+        menu_name+=("$(get_service_name "$port" "$proc")")
+        if [[ "$proc" == "-" ]]; then menu_note+=("not running"); else menu_note+=("listening"); fi
+        menu_enabled+=("$enabled")
+    }
+
+    for i in "${!DET_TCP_PORTS[@]}"; do
+        _menu_add TCP "${DET_TCP_PORTS[$i]}" "${DET_TCP_PROCS[$i]}"
     done
-
-    for i in "${!udp_ports[@]}"; do
-        local port="${udp_ports[$i]}"
-        local proc="${udp_procs[$i]}"
-        local name
-        name=$(get_service_name "$port" "$proc")
-        menu_proto+=("UDP")
-        menu_port+=("$port")
-        menu_proc+=("$proc")
-        menu_name+=("$name")
-        if [[ " $SAFE_DEFAULT_PORTS " == *" $port "* ]]; then
-            menu_enabled+=("true")
-        else
-            menu_enabled+=("false")
-        fi
-        idx=$((idx + 1))
+    for i in "${!DET_UDP_PORTS[@]}"; do
+        _menu_add UDP "${DET_UDP_PORTS[$i]}" "${DET_UDP_PROCS[$i]}"
     done
+    # Always offer HTTP and HTTPS
+    _menu_add TCP 80 "-"
+    _menu_add TCP 443 "-"
+    # Ports the configuration already opens stay visible (and selected);
+    # port ranges cannot be toggled and are simply kept
+    if [[ "$mode" == "existing" ]]; then
+        for tok in $cur_tcp; do
+            if [[ "$tok" == *:* ]]; then keep_tcp+="${keep_tcp:+ }$tok"; else _menu_add TCP "$tok" "-"; fi
+        done
+        for tok in $cur_udp; do
+            if [[ "$tok" == *:* ]]; then keep_udp+="${keep_udp:+ }$tok"; else _menu_add UDP "$tok" "-"; fi
+        done
+    fi
 
-    # Sort by port number (build index array sorted by port)
-    local -a sorted_indices
-    sorted_indices=($(for i in "${!menu_port[@]}"; do echo "$i ${menu_port[$i]}"; done | sort -k2 -n | awk '{print $1}'))
+    # Sort by port number
+    local -a sorted_indices=()
+    while read -r i; do
+        [[ -n "$i" ]] && sorted_indices+=("$i")
+    done < <(for i in "${!menu_port[@]}"; do echo "$i ${menu_port[$i]}"; done | sort -k2 -n | awk '{ print $1 }')
 
-    # Display function
     _display_menu() {
         echo ""
-        echo -e "  ${BOLD}${CYAN}┌────┬──────────────────────┬────────┬───────┬──────────────────┐${NC}"
-        echo -e "  ${BOLD}${CYAN}│${NC} ${BOLD} #  ${CYAN}│${NC} ${BOLD}Service              ${CYAN}│${NC} ${BOLD}Port   ${CYAN}│${NC} ${BOLD}Proto ${CYAN}│${NC} ${BOLD}Firewall         ${CYAN}│${NC}"
-        echo -e "  ${BOLD}${CYAN}├────┼──────────────────────┼────────┼───────┼──────────────────┤${NC}"
+        echo -e "  ${BOLD}${CYAN}┌────┬──────────────────────┬────────┬───────┬─────────────┬─────────┐${NC}"
+        echo -e "  ${BOLD}${CYAN}│${NC} ${BOLD}#  ${CYAN}│${NC} ${BOLD}Service              ${CYAN}│${NC} ${BOLD}Port   ${CYAN}│${NC} ${BOLD}Proto ${CYAN}│${NC} ${BOLD}State       ${CYAN}│${NC} ${BOLD}Access  ${CYAN}│${NC}"
+        echo -e "  ${BOLD}${CYAN}├────┼──────────────────────┼────────┼───────┼─────────────┼─────────┤${NC}"
 
-        local display_num=1
+        local display_num=1 si name status_text
         for si in "${sorted_indices[@]}"; do
-            local name="${menu_name[$si]}"
-            local port="${menu_port[$si]}"
-            local proto="${menu_proto[$si]}"
-            local enabled="${menu_enabled[$si]}"
-            local proc="${menu_proc[$si]}"
-
-            # Truncate name to 20 chars
-            local display_name
-            if [[ ${#name} -gt 20 ]]; then
-                display_name="${name:0:17}..."
-            else
-                display_name="$name"
-            fi
-
-            # Format columns
-            local status_text
-            if [[ "$enabled" == "true" ]]; then
+            name="${menu_name[$si]}"
+            (( ${#name} > 20 )) && name="${name:0:17}..."
+            if [[ "${menu_enabled[$si]}" == "true" ]]; then
                 status_text="${GREEN}✓ ALLOW${NC}"
             else
                 status_text="${RED}✗ BLOCK${NC}"
             fi
-
-            printf "  ${CYAN}│${NC} %-2s ${CYAN}│${NC} %-20s ${CYAN}│${NC} %-6s ${CYAN}│${NC} %-5s ${CYAN}│${NC} %b          ${CYAN}│${NC}\n" \
-                "$display_num" "$display_name" "$port" "$proto" "$status_text"
-
+            printf "  ${CYAN}│${NC} %-2s ${CYAN}│${NC} %-20s ${CYAN}│${NC} %-6s ${CYAN}│${NC} %-5s ${CYAN}│${NC} %-11s ${CYAN}│${NC} %b ${CYAN}│${NC}\n" \
+                "$display_num" "$name" "${menu_port[$si]}" "${menu_proto[$si]}" "${menu_note[$si]}" "$status_text"
             display_num=$((display_num + 1))
         done
 
-        echo -e "  ${BOLD}${CYAN}└────┴──────────────────────┴────────┴───────┴──────────────────┘${NC}"
+        echo -e "  ${BOLD}${CYAN}└────┴──────────────────────┴────────┴───────┴─────────────┴─────────┘${NC}"
+        echo -e "  SSH (port ${ssh_ports}) is always kept reachable and is not listed."
+        [[ -n "${keep_tcp}${keep_udp}" ]] && echo -e "  Port ranges from your config are kept: ${keep_tcp} ${keep_udp}"
         echo ""
     }
 
-    # Show menu and handle input
+    local user_input num si
     while true; do
         _display_menu
 
         echo -e "  ${BOLD}Toggle:${NC} enter number(s) to toggle (e.g., ${BOLD}3 5${NC})"
-        echo -e "  ${BOLD}Shortcuts:${NC} ${GREEN}a${NC}=allow all  ${RED}n${NC}=block all  ${BOLD}d${NC}=done"
+        echo -e "  ${BOLD}Shortcuts:${NC} ${GREEN}a${NC}=allow all  ${RED}n${NC}=block all  ${BOLD}d${NC}=done (or just Enter)"
         echo ""
-        read -rp "  > " user_input
+        ask user_input "  > " "d"
 
-        # Handle shortcuts
         case "${user_input,,}" in
-            d|done|"")
-                break
-                ;;
+            d|done)
+                break ;;
             a|all)
-                for i in "${!menu_enabled[@]}"; do
-                    menu_enabled[$i]="true"
-                done
-                continue
-                ;;
+                for i in "${!menu_enabled[@]}"; do menu_enabled[$i]="true"; done
+                continue ;;
             n|none)
-                for i in "${!menu_enabled[@]}"; do
-                    menu_enabled[$i]="false"
-                done
-                # Always keep SSH allowed
-                for i in "${!menu_port[@]}"; do
-                    if [[ "${menu_port[$i]}" == "22" ]]; then
-                        menu_enabled[$i]="true"
-                    fi
-                done
-                continue
-                ;;
+                for i in "${!menu_enabled[@]}"; do menu_enabled[$i]="false"; done
+                continue ;;
         esac
 
-        # Toggle specific numbers
         for num in $user_input; do
             if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#sorted_indices[@]} )); then
-                local si="${sorted_indices[$((num - 1))]}"
+                si="${sorted_indices[$((num - 1))]}"
                 if [[ "${menu_enabled[$si]}" == "true" ]]; then
                     menu_enabled[$si]="false"
                 else
@@ -500,37 +457,71 @@ service_selection_menu() {
         done
     done
 
-    # Build port lists from selections
+    # Build port lists from selections (in port order)
     local selected_tcp="" selected_udp=""
-    for i in "${!menu_enabled[@]}"; do
-        if [[ "${menu_enabled[$i]}" == "true" ]]; then
-            local port="${menu_port[$i]}"
-            local proto="${menu_proto[$i]}"
-            # Don't add SSH port to TCP_PORTS (it's handled separately)
-            if [[ "$port" == "$(detect_ssh_port)" && "$proto" == "TCP" ]]; then
-                continue
-            fi
-            if [[ "$proto" == "TCP" ]]; then
-                selected_tcp="${selected_tcp:+$selected_tcp }$port"
-            else
-                selected_udp="${selected_udp:+$selected_udp }$port"
-            fi
+    for si in ${sorted_indices[@]+"${sorted_indices[@]}"}; do
+        [[ "${menu_enabled[$si]}" == "true" ]] || continue
+        if [[ "${menu_proto[$si]}" == "TCP" ]]; then
+            selected_tcp+="${selected_tcp:+ }${menu_port[$si]}"
+        else
+            selected_udp+="${selected_udp:+ }${menu_port[$si]}"
         fi
     done
+    [[ -n "$keep_tcp" ]] && selected_tcp+="${selected_tcp:+ }$keep_tcp"
+    [[ -n "$keep_udp" ]] && selected_udp+="${selected_udp:+ }$keep_udp"
 
-    # Apply to config
-    sed -i "s/^TCP_PORTS=.*/TCP_PORTS=\"${selected_tcp}\"/" "$config_file"
-    sed -i "s/^UDP_PORTS=.*/UDP_PORTS=\"${selected_udp}\"/" "$config_file"
+    config_set_value "$config_file" TCP_PORTS "$selected_tcp"
+    config_set_value "$config_file" UDP_PORTS "$selected_udp"
 
     echo ""
-    log_success "Firewall configured based on service selection"
-    if [[ -n "$selected_tcp" ]]; then
-        log_info "TCP ports: ${BOLD}${selected_tcp}${NC}"
+    log_success "Open TCP ports: ${BOLD}${selected_tcp:-none}${NC}"
+    log_success "Open UDP ports: ${BOLD}${selected_udp:-none}${NC}"
+    log_info "SSH (${ssh_ports}) stays reachable"
+}
+
+# Ask the remaining configuration questions
+configure_interactively() {
+    local config_file="$1" mode="$2" answer tok bad
+
+    service_selection_menu "$config_file" "$mode"
+
+    load_config "$config_file"
+    echo ""
+    if ssh_is_restricted; then
+        log_info "SSH is restricted to: ${SSH_ALLOWED_IPS} ${SSH_ALLOWED_IPS_IPV6} (unchanged)"
+    else
+        ask answer "  Restrict SSH (${SSH_PORTS}) to specific IPs/hostnames? [y/N]: " "n"
+        if [[ "${answer,,}" == "y" ]]; then
+            while true; do
+                ask answer "  Allowed SSH IPs/hostnames (space-separated, empty = no restriction): " ""
+                bad=""
+                for tok in $answer; do
+                    classify_addr "$tok" || { bad="$tok"; break; }
+                done
+                if [[ -n "$bad" ]]; then
+                    log_warn "'${bad}' is not a valid IP, CIDR or hostname — try again"
+                    continue
+                fi
+                if [[ -n "${answer// /}" ]]; then
+                    config_set_value "$config_file" SSH_ALLOWED_IPS "$(echo "$answer" | xargs)"
+                    log_success "SSH restricted to: $answer"
+                    log_warn "Make sure your own address is in this list, or you will lose SSH access"
+                fi
+                break
+            done
+        fi
     fi
-    if [[ -n "$selected_udp" ]]; then
-        log_info "UDP ports: ${BOLD}${selected_udp}${NC}"
+
+    if [[ "$mode" == "fresh" ]]; then
+        echo ""
+        ask answer "  Allow ping (ICMP)? [Y/n]: " "y"
+        if [[ "${answer,,}" == "n" ]]; then
+            config_set_value "$config_file" ICMP_ENABLE "false"
+        fi
     fi
-    log_info "SSH is always allowed (managed separately)"
+
+    echo ""
+    log_success "Configuration saved: ${config_file}"
 }
 
 # =============================================================================
@@ -538,80 +529,45 @@ service_selection_menu() {
 # =============================================================================
 
 install_dependencies() {
-    log_header "Installing dependencies"
+    log_header "Checking dependencies"
 
     local distro_family
     distro_family=$(detect_distro_family)
 
-    # Update package cache
-    log_info "Updating package cache..."
-    update_pkg_cache
-
-    # Ensure we have a firewall backend
-    if ! command -v nft &>/dev/null && ! command -v iptables &>/dev/null; then
-        log_info "No firewall backend found, installing..."
-
-        case "$distro_family" in
-            debian)
-                install_package "nftables"
-                install_package "iptables"  # Fallback
-                ;;
-            rhel)
-                install_package "nftables"
-                install_package "iptables-nft" 2>/dev/null || install_package "iptables" || true
-                ;;
-            arch)
-                install_package "nftables"
-                install_package "iptables-nft"
-                ;;
-            alpine)
-                install_package "nftables"
-                install_package "iptables"
-                ;;
-            suse)
-                install_package "nftables"
-                install_package "iptables"
-                ;;
-            *)
-                log_warn "Unknown distro family. Attempting to install nftables..."
-                install_package "nftables" || install_package "iptables" || true
-                ;;
-        esac
-    fi
-
-    # Ensure we have conntrack tools
-    if ! command -v conntrack &>/dev/null; then
-        case "$distro_family" in
-            debian)  install_package "conntrack" 2>/dev/null || true ;;
-            rhel)    install_package "conntrack-tools" 2>/dev/null || true ;;
-            arch)    install_package "conntrack-tools" 2>/dev/null || true ;;
-            alpine)  install_package "conntrack-tools" 2>/dev/null || true ;;
-            suse)    install_package "conntrack-tools" 2>/dev/null || true ;;
-        esac
-    fi
-
-    # Ensure we have dig for hostname resolution
-    if ! command -v dig &>/dev/null; then
-        case "$distro_family" in
-            debian)  install_package "dnsutils" 2>/dev/null || true ;;
-            rhel)    install_package "bind-utils" 2>/dev/null || true ;;
-            arch)    install_package "bind" 2>/dev/null || true ;;
-            alpine)  install_package "bind-tools" 2>/dev/null || true ;;
-            suse)    install_package "bind-utils" 2>/dev/null || true ;;
-        esac
-    fi
-
-    # Verify we have at least one backend
-    if command -v nft &>/dev/null; then
-        log_success "nftables available: $(nft --version 2>/dev/null || echo 'installed')"
-    fi
-    if command -v iptables &>/dev/null; then
-        log_success "iptables available: $(iptables --version 2>/dev/null || echo 'installed')"
+    if command -v nft &>/dev/null || command -v iptables &>/dev/null; then
+        command -v nft &>/dev/null && log_success "nftables available: $(nft --version 2>/dev/null || echo 'installed')"
+        command -v iptables &>/dev/null && log_success "iptables available: $(iptables --version 2>/dev/null || echo 'installed')"
+    else
+        log_info "No firewall backend found, installing nftables..."
+        update_pkg_cache
+        install_package "nftables" || true
+        if ! command -v nft &>/dev/null; then
+            log_warn "nftables could not be installed, trying iptables..."
+            install_package "iptables" || true
+        fi
     fi
 
     if ! command -v nft &>/dev/null && ! command -v iptables &>/dev/null; then
-        log_error "Failed to install any firewall backend"
+        log_error "No firewall backend available. Install 'nftables' or 'iptables' and run the installer again."
         exit 1
+    fi
+
+    if ! detect_backend &>/dev/null; then
+        log_error "A firewall backend is installed but not usable (missing kernel support or permissions)"
+        exit 1
+    fi
+    log_success "Backend in use: $(detect_backend)"
+
+    # Hostname resolution works with getent (always present on glibc systems);
+    # only install DNS tools when no resolver command exists at all.
+    if ! command -v getent &>/dev/null && ! command -v dig &>/dev/null && ! command -v host &>/dev/null; then
+        case "$distro_family" in
+            debian)  install_package "dnsutils" || true ;;
+            rhel)    install_package "bind-utils" || true ;;
+            arch)    install_package "bind" || true ;;
+            alpine)  install_package "bind-tools" || true ;;
+            suse)    install_package "bind-utils" || true ;;
+        esac
     fi
 }
 
@@ -619,8 +575,11 @@ install_dependencies() {
 # Detect existing installation (upgrade path: v1.x, v2.x → v3.x)
 # =============================================================================
 
+EXISTING_INSTALL="false"
+
 detect_existing_install() {
-    if [[ -f "$SBIN_LINK" ]] || [[ -d "$INSTALL_DIR" ]]; then
+    if [[ -e "$SBIN_LINK" ]] || [[ -d "$INSTALL_DIR" ]]; then
+        EXISTING_INSTALL="true"
         local installed_version="unknown"
         if [[ -f "$INSTALL_DIR/lib/common.sh" ]]; then
             installed_version=$(grep "BINADIT_VERSION=" "$INSTALL_DIR/lib/common.sh" 2>/dev/null | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/' || echo "unknown")
@@ -634,16 +593,13 @@ detect_existing_install() {
             log_success "Existing configuration found - will be ${BOLD}preserved${NC}"
         fi
 
-        if [[ "$NON_INTERACTIVE" != "true" ]]; then
-            echo ""
-            read -rp "  Upgrade to v${BINADIT_VERSION}? [Y/n]: " do_upgrade
-            if [[ "${do_upgrade,,}" == "n" ]]; then
-                log_info "Upgrade cancelled"
-                exit 0
-            fi
+        local do_upgrade
+        echo ""
+        ask do_upgrade "  Install v${BINADIT_VERSION} over it? [Y/n]: " "y"
+        if [[ "${do_upgrade,,}" == "n" ]]; then
+            log_info "Cancelled — nothing was changed"
+            exit 0
         fi
-
-        log_info "Upgrading binadit-firewall (config preserved)..."
     fi
 }
 
@@ -651,86 +607,87 @@ detect_existing_install() {
 # Install binadit-firewall files
 # =============================================================================
 
-install_files() {
-    log_header "Installing binadit-firewall"
+install_program_files() {
+    mkdir -p "$CONFIG_DIR" "$BACKUP_DIR"
+    mkdir -p "$(dirname "$INSTALL_DIR")" "$(dirname "$SBIN_LINK")"
 
-    # Create directories
-    mkdir -p "$INSTALL_DIR"
-    mkdir -p "$CONFIG_DIR"
-    mkdir -p "$BACKUP_DIR"
+    # Build the new program directory next to the old one and swap it in, so
+    # a running binadit-firewall process never sees half-written files
+    local staging="${INSTALL_DIR}.new.$$"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    cp -r "${INSTALLER_DIR}/src/"* "$staging/"
+    chmod 755 "$staging" "$staging/lib"
+    chmod 755 "$staging/binadit-firewall.sh"
+    chmod 644 "$staging/lib/"*.sh
 
-    # Copy source files
-    log_info "Copying files to $INSTALL_DIR..."
-    cp -r "${INSTALLER_DIR}/src/"* "$INSTALL_DIR/"
+    if [[ -d "$INSTALL_DIR" ]]; then
+        rm -rf "${INSTALL_DIR}.old"
+        mv "$INSTALL_DIR" "${INSTALL_DIR}.old"
+    fi
+    mv "$staging" "$INSTALL_DIR"
+    rm -rf "${INSTALL_DIR}.old"
 
-    # Set permissions
-    chmod 755 "$INSTALL_DIR/binadit-firewall.sh"
-    chmod 644 "$INSTALL_DIR/lib/"*.sh
-
-    # Create symlink for easy access
     ln -sf "$INSTALL_DIR/binadit-firewall.sh" "$SBIN_LINK"
-    log_success "Command available: binadit-firewall"
 
-    # Copy example config
     cp "${INSTALLER_DIR}/config/firewall.conf.example" "${CONFIG_DIR}/firewall.conf.example"
-    log_success "Example config: ${CONFIG_DIR}/firewall.conf.example"
+}
 
-    # Install service for boot persistence
-    if command -v systemctl &>/dev/null; then
-        # systemd (Debian 8+, Ubuntu 15+, CentOS 7+, Fedora 15+, Arch, SUSE 12+)
+install_boot_service() {
+    if has_systemctl; then
+        # systemd
+        mkdir -p "$SYSTEMD_DIR"
         cp "${INSTALLER_DIR}/config/binadit-firewall.service" "${SYSTEMD_DIR}/binadit-firewall.service"
-        systemctl daemon-reload
-        systemctl enable binadit-firewall.service
-        log_success "Systemd service installed and enabled"
+        chmod 644 "${SYSTEMD_DIR}/binadit-firewall.service"
+        systemctl daemon-reload 2>/dev/null || true
+        if systemctl enable binadit-firewall.service &>/dev/null; then
+            log_success "Systemd service installed and enabled (starts at boot)"
+        else
+            log_warn "Could not enable the systemd service — run: systemctl enable binadit-firewall"
+        fi
     elif command -v rc-service &>/dev/null; then
         # OpenRC (Alpine Linux, Gentoo)
-        log_info "OpenRC detected - installing OpenRC service"
         cat > /etc/init.d/binadit-firewall <<'OPENRC_EOF'
 #!/sbin/openrc-run
 # binadit-firewall OpenRC service
 
 description="binadit-firewall - Simple Linux Firewall Manager"
+extra_started_commands="reload"
 
 depend() {
-    need net
-    before firewall
-    after networking
+    need localmount
+    before net
 }
 
 start() {
     ebegin "Starting binadit-firewall"
-    /usr/local/sbin/binadit-firewall start
+    /usr/local/sbin/binadit-firewall start >/dev/null
     eend $?
 }
 
 stop() {
     ebegin "Stopping binadit-firewall"
-    /usr/local/sbin/binadit-firewall stop
+    /usr/local/sbin/binadit-firewall stop >/dev/null
     eend $?
 }
 
-restart() {
-    ebegin "Restarting binadit-firewall"
-    /usr/local/sbin/binadit-firewall restart
+reload() {
+    ebegin "Reloading binadit-firewall"
+    /usr/local/sbin/binadit-firewall reload >/dev/null
     eend $?
-}
-
-status() {
-    /usr/local/sbin/binadit-firewall status
 }
 OPENRC_EOF
         chmod 755 /etc/init.d/binadit-firewall
-        rc-update add binadit-firewall default 2>/dev/null || true
-        log_success "OpenRC service installed and enabled"
+        rc-update add binadit-firewall default &>/dev/null || true
+        log_success "OpenRC service installed and enabled (starts at boot)"
     else
-        # SysVinit fallback (CentOS 6, Debian 7, older systems)
-        log_info "No systemd/OpenRC found - installing SysVinit script"
+        # SysVinit fallback
         cat > /etc/init.d/binadit-firewall <<'INITEOF'
 #!/bin/bash
 ### BEGIN INIT INFO
 # Provides:          binadit-firewall
-# Required-Start:    $network $local_fs
-# Required-Stop:     $network $local_fs
+# Required-Start:    $local_fs
+# Required-Stop:     $local_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: binadit-firewall
@@ -740,82 +697,54 @@ exec /usr/local/sbin/binadit-firewall "$@"
 INITEOF
         chmod 755 /etc/init.d/binadit-firewall
 
-        # Enable on boot
         if command -v update-rc.d &>/dev/null; then
-            update-rc.d binadit-firewall defaults
+            update-rc.d binadit-firewall defaults &>/dev/null || true
         elif command -v chkconfig &>/dev/null; then
-            chkconfig binadit-firewall on
+            chkconfig --add binadit-firewall &>/dev/null || true
+            chkconfig binadit-firewall on &>/dev/null || true
         fi
-        log_success "SysVinit service installed"
+        log_success "SysVinit service installed (starts at boot)"
     fi
 }
 
+install_files() {
+    log_header "Installing binadit-firewall"
+    install_program_files
+    log_success "Program files installed: ${INSTALL_DIR}"
+    log_success "Command available: binadit-firewall"
+    install_boot_service
+}
+
 # =============================================================================
-# Migrate from old binadit-firewall
+# Migrate from old binadit-firewall v1.x
 # =============================================================================
 
 migrate_old_config() {
     local old_config="/etc/firewall.d/host.conf"
+    [[ -f "$old_config" ]] || return 0
 
-    if [[ ! -f "$old_config" ]]; then
-        return 0
-    fi
-
-    log_header "Migrating from old binadit-firewall"
+    log_header "Migrating from binadit-firewall v1.x"
     log_info "Found old config: $old_config"
+    migrate_v1_config "$old_config" "${CONFIG_DIR}/firewall.conf" "${INSTALLER_DIR}/config/firewall.conf.example"
+}
 
-    # Source old config
-    # shellcheck source=/dev/null
-    source "$old_config"
+# =============================================================================
+# Update mode (called by "binadit-firewall update")
+# =============================================================================
 
-    # Create new config from example
-    cp "${CONFIG_DIR}/firewall.conf.example" "${CONFIG_DIR}/firewall.conf"
+update_only() {
+    require_root
+    install_program_files
+    log_success "Program files updated to v${BINADIT_VERSION}"
 
-    # Migrate values
-    local new_conf="${CONFIG_DIR}/firewall.conf"
-
-    [[ -n "${TCPPORTS:-}" ]] && \
-        sed -i "s/^TCP_PORTS=.*/TCP_PORTS=\"${TCPPORTS}\"/" "$new_conf"
-    [[ -n "${TCPPORTS_INPUT:-}" ]] && \
-        sed -i "s/^TCP_PORTS_INPUT=.*/TCP_PORTS_INPUT=\"${TCPPORTS_INPUT}\"/" "$new_conf"
-    [[ -n "${TCPPORTS_OUTPUT:-}" ]] && \
-        sed -i "s/^TCP_PORTS_OUTPUT=.*/TCP_PORTS_OUTPUT=\"${TCPPORTS_OUTPUT}\"/" "$new_conf"
-    [[ -n "${UDPPORTS:-}" ]] && \
-        sed -i "s/^UDP_PORTS=.*/UDP_PORTS=\"${UDPPORTS}\"/" "$new_conf"
-    [[ -n "${DMZS:-}" ]] && \
-        sed -i "s/^TRUSTED_IPS=.*/TRUSTED_IPS=\"${DMZS}\"/" "$new_conf"
-    [[ -n "${SSHACCESS:-}" ]] && \
-        sed -i "s/^SSH_ALLOWED_IPS=.*/SSH_ALLOWED_IPS=\"${SSHACCESS}\"/" "$new_conf"
-    [[ -n "${SSHACCESS_IPv6:-}" ]] && \
-        sed -i "s/^SSH_ALLOWED_IPS_IPV6=.*/SSH_ALLOWED_IPS_IPV6=\"${SSHACCESS_IPv6}\"/" "$new_conf"
-    [[ -n "${DMZRANGE:-}" ]] && \
-        sed -i "s/^TRUSTED_RANGES=.*/TRUSTED_RANGES=\"${DMZRANGE}\"/" "$new_conf"
-    [[ -n "${BLACKLIST:-}" ]] && \
-        sed -i "s/^BLACKLIST=.*/BLACKLIST=\"${BLACKLIST}\"/" "$new_conf"
-    [[ -n "${BLOCKRANGE:-}" ]] && \
-        sed -i "s/^BLOCKED_RANGES=.*/BLOCKED_RANGES=\"${BLOCKRANGE}\"/" "$new_conf"
-    [[ -n "${DMZS_IPv6:-}" ]] && \
-        sed -i "s/^TRUSTED_IPS_IPV6=.*/TRUSTED_IPS_IPV6=\"${DMZS_IPv6}\"/" "$new_conf"
-    [[ -n "${BLACKLIST_IPv6:-}" ]] && \
-        sed -i "s/^BLACKLIST_IPV6=.*/BLACKLIST_IPV6=\"${BLACKLIST_IPv6}\"/" "$new_conf"
-
-    if [[ "${MULTICAST_ENABLE:-}" == "TRUE" ]]; then
-        sed -i 's/^MULTICAST_ENABLE=.*/MULTICAST_ENABLE="true"/' "$new_conf"
-    fi
-    if [[ "${NATROUTER_ENABLE:-}" == "TRUE" ]]; then
-        sed -i 's/^NAT_ENABLE=.*/NAT_ENABLE="true"/' "$new_conf"
+    # Refresh the boot service definition if one is installed
+    if [[ -f "${SYSTEMD_DIR}/binadit-firewall.service" ]] && has_systemctl; then
+        cp "${INSTALLER_DIR}/config/binadit-firewall.service" "${SYSTEMD_DIR}/binadit-firewall.service"
+        systemctl daemon-reload 2>/dev/null || true
     fi
 
-    # Backup old config
-    mv "$old_config" "${old_config}.migrated.$(date +%Y%m%d)"
-    log_success "Old config migrated to: $new_conf"
-    log_info "Old config backed up to: ${old_config}.migrated.*"
-
-    # Remove old init.d script if present
-    if [[ -f /etc/init.d/firewall ]]; then
-        mv /etc/init.d/firewall /etc/init.d/firewall.old.bak
-        log_info "Old /etc/init.d/firewall backed up"
-    fi
+    # Let the new version finish the job (reload rules, refresh helpers)
+    "$SBIN_LINK" post-update
 }
 
 # =============================================================================
@@ -827,52 +756,74 @@ uninstall() {
 
     log_header "Uninstalling binadit-firewall"
 
-    # Stop and disable service
-    if command -v systemctl &>/dev/null; then
-        systemctl stop binadit-firewall 2>/dev/null || true
-        systemctl disable binadit-firewall 2>/dev/null || true
-        rm -f "${SYSTEMD_DIR}/binadit-firewall.service"
-        systemctl daemon-reload
+    # Remove the rules while the program is still installed
+    if [[ -x "$SBIN_LINK" ]]; then
+        "$SBIN_LINK" stop >/dev/null 2>&1 || true
     fi
 
-    # Remove init.d script
-    rm -f /etc/init.d/binadit-firewall
+    # Boot service
+    if has_systemctl; then
+        systemctl disable --now binadit-firewall-dns.timer &>/dev/null || true
+        systemctl disable --now binadit-firewall-update.timer &>/dev/null || true
+        systemctl disable binadit-firewall.service &>/dev/null || true
+        rm -f "${SYSTEMD_DIR}/binadit-firewall.service" \
+              "${SYSTEMD_DIR}/binadit-firewall-dns.service" "${SYSTEMD_DIR}/binadit-firewall-dns.timer" \
+              "${SYSTEMD_DIR}/binadit-firewall-update.service" "${SYSTEMD_DIR}/binadit-firewall-update.timer"
+        systemctl daemon-reload &>/dev/null || true
+        systemctl reset-failed 'binadit-firewall*' &>/dev/null || true
+    fi
+    if [[ -f /etc/init.d/binadit-firewall ]]; then
+        if command -v rc-update &>/dev/null; then
+            rc-update del binadit-firewall default &>/dev/null || true
+        elif command -v update-rc.d &>/dev/null; then
+            update-rc.d -f binadit-firewall remove &>/dev/null || true
+        elif command -v chkconfig &>/dev/null; then
+            chkconfig --del binadit-firewall &>/dev/null || true
+        fi
+        rm -f /etc/init.d/binadit-firewall
+    fi
+    log_info "Removed boot service"
 
-    # Flush rules
-    "${SBIN_LINK}" stop 2>/dev/null || true
+    # Helpers
+    rm -f /etc/profile.d/binadit-firewall-status.sh /etc/profile.d/binadit-firewall-prompt.sh
+    rm -f /etc/cron.weekly/binadit-firewall-update /etc/cron.d/binadit-firewall-dns
+    rm -f /etc/periodic/weekly/binadit-firewall-update /etc/periodic/15min/binadit-firewall-dns
+    rm -f /run/binadit-firewall.active /var/run/binadit-firewall.active /run/binadit-firewall.lock
+    log_info "Removed login indicators and scheduled jobs"
 
-    # Remove MOTD login status indicator
-    rm -f /etc/profile.d/binadit-firewall-status.sh
-    log_info "Removed login status indicator"
-
-    # Remove prompt indicator (🟢/🔴)
-    rm -f /etc/profile.d/binadit-firewall-prompt.sh
-    log_info "Removed prompt indicator"
-
-    # Remove auto-update cron job
-    rm -f /etc/cron.weekly/binadit-firewall-update
-    log_info "Removed auto-update cron job"
-
-    # Remove program files
+    # Program files
     rm -f "$SBIN_LINK"
-    rm -rf "$INSTALL_DIR"
+    rm -rf "$INSTALL_DIR" "${INSTALL_DIR}.old"
 
-    log_success "binadit-firewall uninstalled"
+    # Firewalls the installer disabled: make them usable again (not started)
+    local record="${CONFIG_DIR}/state/disabled-services" svc restored=""
+    if [[ -f "$record" ]] && has_systemctl; then
+        while IFS= read -r svc; do
+            [[ -z "$svc" ]] && continue
+            systemctl unmask "$svc" &>/dev/null || true
+            restored+="${restored:+ }$svc"
+        done < "$record"
+        rm -f "$record"
+    fi
 
-    # Ask about config removal
+    log_success "binadit-firewall uninstalled — all its firewall rules are removed"
+    log_warn "This server now has NO firewall"
+    if [[ -n "$restored" ]]; then
+        log_info "Previously disabled by the installer and now available again: ${BOLD}${restored}${NC}"
+        log_info "Re-enable with e.g.: systemctl enable --now ${restored%% *}"
+    fi
+
+    # Configuration
     if [[ -d "$CONFIG_DIR" ]]; then
-        if [[ "$NON_INTERACTIVE" == "true" ]]; then
-            log_info "Configuration preserved in: $CONFIG_DIR"
-            log_info "To remove config: rm -rf $CONFIG_DIR"
+        local remove_config
+        echo ""
+        ask remove_config "  Remove configuration and backups (${CONFIG_DIR})? [y/N]: " "n"
+        if [[ "${remove_config,,}" == "y" ]]; then
+            rm -rf "$CONFIG_DIR"
+            log_success "Configuration removed"
         else
-            echo ""
-            read -rp "  Remove configuration ($CONFIG_DIR)? [y/N]: " remove_config
-            if [[ "${remove_config,,}" == "y" ]]; then
-                rm -rf "$CONFIG_DIR"
-                log_success "Configuration removed"
-            else
-                log_info "Configuration preserved in: $CONFIG_DIR"
-            fi
+            log_info "Configuration preserved in: $CONFIG_DIR"
+            log_info "To remove it: rm -rf $CONFIG_DIR"
         fi
     fi
 }
@@ -882,33 +833,35 @@ uninstall() {
 # =============================================================================
 
 main() {
-    # Parse arguments
-    NON_INTERACTIVE="false"
-    local action="install"
+    local action="install" arg
 
     for arg in "$@"; do
         case "$arg" in
             --uninstall|uninstall)
                 action="uninstall" ;;
+            --update)
+                action="update"; NON_INTERACTIVE="true" ;;
             --non-interactive|-y)
                 NON_INTERACTIVE="true" ;;
             --help|-h)
-                echo "Usage: sudo bash install.sh [--uninstall] [--non-interactive]"
+                echo "Usage: sudo bash install.sh [--non-interactive] [--uninstall] [--update]"
                 exit 0 ;;
+            *)
+                log_error "Unknown option: $arg"
+                echo "Usage: sudo bash install.sh [--non-interactive] [--uninstall] [--update]"
+                exit 1 ;;
         esac
     done
 
-    # Auto-detect non-interactive mode
-    # When piped via get.sh, stdin is redirected from /dev/tty so -t 0 will be true.
-    # Only force non-interactive if there is truly no terminal available.
-    if [[ ! -t 0 ]] && [[ ! -e /dev/tty ]]; then
+    # Without a terminal on stdin nobody can answer questions
+    if [[ ! -t 0 ]]; then
         NON_INTERACTIVE="true"
     fi
 
-    if [[ "$action" == "uninstall" ]]; then
-        uninstall
-        exit 0
-    fi
+    case "$action" in
+        uninstall) uninstall; exit 0 ;;
+        update)    update_only; exit 0 ;;
+    esac
 
     require_root
 
@@ -918,170 +871,133 @@ main() {
     distro=$(detect_distro)
     distro_family=$(detect_distro_family)
     log_info "Detected OS: ${BOLD}${distro}${NC} (family: ${distro_family})"
+    [[ "$NON_INTERACTIVE" == "true" ]] && log_info "Running non-interactive: using defaults, keeping existing configuration"
 
-    # Step 0: Check for existing v2.x installation (upgrade path)
+    # Step 1: existing installation? other firewalls? (questions only)
     detect_existing_install
+    check_competing_firewalls
 
-    # Step 1: Disable competing firewalls
-    disable_competing_firewalls
-
-    # Step 2: Install dependencies
+    # Step 2: dependencies
     install_dependencies
 
-    # Step 3: Migrate old config if present
+    # Step 3: migrate a v1.x config if present
     migrate_old_config
 
-    # Step 4: Install files
+    # Step 4: program files + boot service
     install_files
 
-    # Step 5: Setup configuration
-    local run_service_detection=false
-
-    if [[ ! -f "${CONFIG_DIR}/firewall.conf" ]]; then
-        # Fresh install: start with example config
-        cp "${CONFIG_DIR}/firewall.conf.example" "${CONFIG_DIR}/firewall.conf"
-        log_info "Default configuration installed"
-        run_service_detection=true
-    else
-        # Re-install: offer to reconfigure
-        log_info "Existing configuration found: ${CONFIG_DIR}/firewall.conf"
+    # Step 5: configuration
+    local config_file="${CONFIG_DIR}/firewall.conf"
+    if [[ ! -f "$config_file" ]]; then
+        cp "${CONFIG_DIR}/firewall.conf.example" "$config_file"
+        log_info "Default configuration installed (HTTP, HTTPS and SSH open)"
         if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            configure_interactively "$config_file" "fresh"
+        fi
+    else
+        log_success "Keeping existing configuration: ${config_file}"
+        if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            local reconfig
             echo ""
-            read -rp "  Configure firewall ports based on detected services? [Y/n]: " reconfig
-            if [[ "${reconfig,,}" != "n" ]]; then
-                run_service_detection=true
+            ask reconfig "  Review which ports are open? (your current choices are pre-selected) [y/N]: " "n"
+            if [[ "${reconfig,,}" == "y" ]]; then
+                configure_interactively "$config_file" "existing"
             fi
         fi
     fi
 
-    if [[ "$run_service_detection" == "true" && "$NON_INTERACTIVE" != "true" ]]; then
-        # Detect running services and offer interactive selection
-        service_selection_menu "${CONFIG_DIR}/firewall.conf" || true
-
-        # Offer SSH restriction
-        local ssh_port
-        ssh_port=$(detect_ssh_port)
+    # Step 6: validate before touching the running system
+    if ! "$SBIN_LINK" configtest; then
         echo ""
-        read -rp "  Restrict SSH ($ssh_port) to specific IPs? [y/N]: " restrict_ssh
-        if [[ "${restrict_ssh,,}" == "y" ]]; then
-            read -rp "  Enter allowed SSH IPs (space-separated): " ssh_ips
-            if [[ -n "$ssh_ips" ]]; then
-                sed -i "s/^SSH_ALLOWED_IPS=.*/SSH_ALLOWED_IPS=\"${ssh_ips}\"/" "${CONFIG_DIR}/firewall.conf"
-                log_success "SSH restricted to: $ssh_ips"
-            fi
-        fi
-
-        # Allow ping?
-        echo ""
-        read -rp "  Allow ping (ICMP)? [Y/n]: " allow_ping
-        if [[ "${allow_ping,,}" == "n" ]]; then
-            sed -i "s/^ICMP_ENABLE=.*/ICMP_ENABLE=\"false\"/" "${CONFIG_DIR}/firewall.conf"
-        fi
-
-        echo ""
-        log_success "Configuration saved: ${CONFIG_DIR}/firewall.conf"
-        log_info "Edit anytime: nano ${CONFIG_DIR}/firewall.conf"
-        log_info "Or use: binadit-firewall config show"
+        log_error "The configuration has errors, so the firewall was NOT started and nothing else was changed."
+        log_info "Fix ${config_file} and run: ${BOLD}binadit-firewall start${NC}"
+        exit 1
     fi
 
-    # Step 6: Start firewall
-    echo ""
+    # Step 7: switch over
+    disable_competing_firewalls
+
     log_header "Starting firewall"
-    "$SBIN_LINK" start || log_warn "Firewall start failed — run 'binadit-firewall start' manually"
+    local started="false"
+    if systemd_running; then
+        # Start through systemd so "systemctl status" reflects reality
+        if systemctl restart binadit-firewall.service; then
+            started="true"
+            "$SBIN_LINK" status 2>/dev/null | sed -n '/Firewall Rule Summary/,/└/p' || true
+        fi
+    elif "$SBIN_LINK" start; then
+        started="true"
+    fi
 
-    # Done
     echo ""
-    echo -e "${GREEN}${BOLD}"
-    cat <<'COMPLETE'
+    if [[ "$started" == "true" ]]; then
+        echo -e "${GREEN}${BOLD}"
+        cat <<'COMPLETE'
     ╔═══════════════════════════════════════════════════════════════════════════╗
     ║                                                                           ║
-    ║                         ✅  INSTALLATION COMPLETE                          ║
+    ║              ✅  INSTALLATION COMPLETE — FIREWALL IS ACTIVE               ║
     ║                                                                           ║
     ╚═══════════════════════════════════════════════════════════════════════════╝
 COMPLETE
-    echo -e "${NC}"
-    # Offer weekly auto-updates
+        echo -e "${NC}"
+    else
+        echo -e "${RED}${BOLD}"
+        cat <<'FAILED'
+    ╔═══════════════════════════════════════════════════════════════════════════╗
+    ║                                                                           ║
+    ║        ⚠️  INSTALLED, BUT THE FIREWALL COULD NOT BE STARTED               ║
+    ║                                                                           ║
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+FAILED
+        echo -e "${NC}"
+        log_error "The server is NOT protected by binadit-firewall right now."
+        log_info "See what is wrong with: ${BOLD}binadit-firewall start${NC}"
+    fi
+
+    # Optional extras (interactive only)
     if [[ "$NON_INTERACTIVE" != "true" ]]; then
-        echo ""
-        read -rp "  Enable weekly automatic updates? [Y/n]: " enable_autoupdate
-        if [[ "${enable_autoupdate,,}" != "n" ]]; then
-            # Write cron script directly (don't rely on freshly installed binary)
-            local cron_script="/etc/cron.weekly/binadit-firewall-update"
-            if [[ -d /etc/cron.weekly ]]; then
-                cat > "$cron_script" <<'CRONEOF'
-#!/bin/bash
-# binadit-firewall weekly auto-update
-# Installed by: binadit-firewall installer
-# Remove with:  binadit-firewall auto-update off
-
-LOG="/var/log/binadit-firewall-update.log"
-
-{
-    echo "=== binadit-firewall auto-update: $(date) ==="
-    /usr/local/sbin/binadit-firewall update --yes 2>&1
-    echo "=== Update completed: $(date) ==="
-    echo ""
-} >> "$LOG" 2>&1
-
-# Keep log file reasonable (last 500 lines)
-if [ -f "$LOG" ]; then
-    tail -500 "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
-fi
-CRONEOF
-                chmod 755 "$cron_script"
-                log_success "Weekly auto-update enabled"
-                log_info "Cron script: ${cron_script}"
-                log_info "Disable with: ${BOLD}binadit-firewall auto-update off${NC}"
-            else
-                # No /etc/cron.weekly — try via binadit-firewall command
-                "$SBIN_LINK" auto-update on 2>/dev/null || log_warn "Could not enable auto-update (no /etc/cron.weekly/)"
+        local answer
+        if [[ ! -f /etc/cron.weekly/binadit-firewall-update && ! -f /etc/periodic/weekly/binadit-firewall-update \
+              && ! -f "${SYSTEMD_DIR}/binadit-firewall-update.timer" ]]; then
+            ask answer "  Enable weekly automatic updates? [Y/n]: " "y"
+            if [[ "${answer,,}" != "n" ]]; then
+                "$SBIN_LINK" auto-update on || log_warn "Could not enable auto-update"
             fi
         fi
-    fi
 
-    # Offer MOTD login banner
-    if [[ "$NON_INTERACTIVE" != "true" ]]; then
-        echo ""
-        read -rp "  Show firewall status on every login (motd)? [Y/n]: " install_motd
-        if [[ "${install_motd,,}" != "n" ]]; then
-            "$SBIN_LINK" motd-on 2>/dev/null || log_warn "Could not install MOTD script"
-        fi
-    fi
-
-    # Offer prompt indicator (🟢/🔴)
-    if [[ "$NON_INTERACTIVE" != "true" ]]; then
-        echo ""
-        read -rp "  Show 🟢/🔴 firewall status emoji in your prompt? [Y/n]: " install_prompt
-        if [[ "${install_prompt,,}" != "n" ]]; then
-            "$SBIN_LINK" prompt-on 2>/dev/null || log_warn "Could not install prompt indicator"
+        if [[ -d /etc/profile.d ]]; then
+            if [[ ! -f /etc/profile.d/binadit-firewall-status.sh ]]; then
+                echo ""
+                ask answer "  Show firewall status on every login (motd)? [Y/n]: " "y"
+                if [[ "${answer,,}" != "n" ]]; then
+                    "$SBIN_LINK" motd-on || log_warn "Could not install login status"
+                fi
+            fi
+            if [[ ! -f /etc/profile.d/binadit-firewall-prompt.sh ]]; then
+                echo ""
+                ask answer "  Show 🟢/🔴 firewall status emoji in your prompt? [Y/n]: " "y"
+                if [[ "${answer,,}" != "n" ]]; then
+                    "$SBIN_LINK" prompt-on || log_warn "Could not install prompt indicator"
+                fi
+            fi
         fi
     fi
 
     echo ""
     echo -e "  ${BOLD}Commands:${NC}"
-    echo -e "    binadit-firewall start        ${GREEN}# Apply firewall rules${NC}"
-    echo -e "    binadit-firewall stop         ${GREEN}# Disable firewall${NC}"
-    echo -e "    binadit-firewall status       ${GREEN}# Show active rules & summary${NC}"
+    echo -e "    binadit-firewall status       ${GREEN}# Is it active? Which rules?${NC}"
     echo -e "    binadit-firewall config show  ${GREEN}# View all settings${NC}"
-    echo -e "    binadit-firewall config set   ${GREEN}# Change a setting via CLI${NC}"
-    echo -e "    binadit-firewall configtest   ${GREEN}# Validate config${NC}"
+    echo -e "    binadit-firewall config add TCP_PORTS 8080  ${GREEN}# Change a setting${NC}"
+    echo -e "    binadit-firewall reload       ${GREEN}# Apply configuration changes${NC}"
+    echo -e "    binadit-firewall stop         ${GREEN}# Disable firewall${NC}"
     echo -e "    binadit-firewall update       ${GREEN}# Download latest version${NC}"
     echo -e "    binadit-firewall features     ${GREEN}# Full feature documentation${NC}"
-    echo -e "    binadit-firewall help         ${GREEN}# All commands${NC}"
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
     echo -e "    ${CONFIG_DIR}/firewall.conf"
     echo ""
-    echo -e "  ${BOLD}Service management:${NC}"
-    if command -v systemctl &>/dev/null; then
-        echo -e "    systemctl status binadit-firewall"
-        echo -e "    systemctl restart binadit-firewall"
-    elif command -v rc-service &>/dev/null; then
-        echo -e "    rc-service binadit-firewall status"
-    else
-        echo -e "    service binadit-firewall status"
-    fi
-    echo ""
+
+    [[ "$started" == "true" ]] || exit 1
 }
 
 main "$@"

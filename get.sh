@@ -9,11 +9,13 @@
 #   curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
 #   wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
 #
-# Uninstall:
-#   curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --uninstall
-#   wget -qO- https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash -s -- --uninstall
+# Unattended install (no questions):
+#   curl -sL .../get.sh | sudo bash -s -- --non-interactive
 #
-# This script downloads the latest binadit-firewall release and runs install.sh.
+# Uninstall:
+#   curl -sL .../get.sh | sudo bash -s -- --uninstall
+#
+# This script downloads the latest binadit-firewall and runs install.sh.
 # It cleans up after itself — no leftover files.
 # =============================================================================
 
@@ -32,78 +34,78 @@ NC=$'\033[0m'
 
 info()  { echo -e "  ${CYAN}▸${NC} $*"; }
 ok()    { echo -e "  ${GREEN}✓${NC} $*"; }
-fail()  { echo -e "  ${RED}✗${NC} $*"; exit 1; }
+fail()  { echo -e "  ${RED}✗${NC} $*" >&2; exit 1; }
 
-# Detect mode (install vs uninstall)
-ACTION="install"
-for arg in "$@"; do
-    case "$arg" in
-        --uninstall|uninstall) ACTION="uninstall" ;;
-    esac
-done
+main() {
+    # Detect mode (install vs uninstall)
+    local action="install" arg
+    for arg in "$@"; do
+        case "$arg" in
+            --uninstall|uninstall) action="uninstall" ;;
+        esac
+    done
 
-# Must be root
-if [[ $EUID -ne 0 ]]; then
-    fail "This script must be run as root. Use: curl -sL ... | ${BOLD}sudo${NC} bash"
-fi
+    if (( BASH_VERSINFO[0] < 4 )); then
+        fail "bash 4 or newer is required."
+    fi
 
-# Need curl or wget
-if command -v curl &>/dev/null; then
-    FETCH="curl -fsSL"
-elif command -v wget &>/dev/null; then
-    FETCH="wget -qO-"
-else
-    fail "curl or wget is required. Install one and try again."
-fi
+    # Must be root
+    if [[ $EUID -ne 0 ]]; then
+        fail "This script must be run as root. Use: curl -sL ... | ${BOLD}sudo${NC} bash"
+    fi
 
-# Need tar or git
-HAS_GIT=false
-HAS_TAR=false
-command -v git &>/dev/null && HAS_GIT=true
-command -v tar &>/dev/null && HAS_TAR=true
+    command -v tar &>/dev/null || fail "tar is required. Install it and try again."
 
-echo ""
-if [[ "$ACTION" == "uninstall" ]]; then
-    echo -e "  ${BOLD}${RED}binadit-firewall${NC} — Uninstaller"
-    echo -e "  ${RED}─────────────────────────────────${NC}"
-else
-    echo -e "  ${BOLD}${CYAN}binadit-firewall${NC} — Quick Installer"
-    echo -e "  ${CYAN}─────────────────────────────────────${NC}"
-fi
-echo ""
+    echo ""
+    if [[ "$action" == "uninstall" ]]; then
+        echo -e "  ${BOLD}${RED}binadit-firewall${NC} — Uninstaller"
+        echo -e "  ${RED}─────────────────────────────────${NC}"
+    else
+        echo -e "  ${BOLD}${CYAN}binadit-firewall${NC} — Quick Installer"
+        echo -e "  ${CYAN}─────────────────────────────────────${NC}"
+    fi
+    echo ""
 
-# Create temp directory
-INSTALL_TMP=$(mktemp -d "${TMPDIR_BASE}/binadit-firewall-install.XXXXXX")
-trap 'rm -rf "$INSTALL_TMP"' EXIT
+    # Create temp directory
+    INSTALL_TMP=$(mktemp -d "${TMPDIR_BASE}/binadit-firewall-install.XXXXXX")
+    trap 'rm -rf "$INSTALL_TMP"' EXIT
 
-info "Downloading binadit-firewall..."
+    info "Downloading binadit-firewall..."
 
-if [[ "$HAS_GIT" == "true" ]]; then
-    git clone --depth 1 -b "$BRANCH" "https://github.com/${REPO}.git" "$INSTALL_TMP/binadit-firewall" 2>/dev/null
-    ok "Downloaded via git"
-elif [[ "$HAS_TAR" == "true" ]]; then
-    $FETCH "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" | tar -xz -C "$INSTALL_TMP"
-    # GitHub extracts to repo-branch/
-    mv "$INSTALL_TMP"/binadit-firewall-* "$INSTALL_TMP/binadit-firewall"
-    ok "Downloaded via tarball"
-else
-    fail "git or tar is required to download the installer."
-fi
+    local url="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+    local archive="$INSTALL_TMP/src.tar.gz"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$archive" || fail "Download failed (${url}). Check the internet connection."
+    elif command -v wget &>/dev/null; then
+        wget -qO "$archive" "$url" || fail "Download failed (${url}). Check the internet connection."
+    else
+        fail "curl or wget is required. Install one and try again."
+    fi
 
-# Run the installer / uninstaller
-if [[ "$ACTION" == "uninstall" ]]; then
-    info "Starting uninstaller..."
-else
-    info "Starting installer..."
-fi
-echo ""
+    tar -xzf "$archive" -C "$INSTALL_TMP" || fail "Downloaded archive is corrupt."
+    local src
+    src=$(find "$INSTALL_TMP" -mindepth 1 -maxdepth 1 -type d | head -1)
+    [[ -n "$src" && -f "$src/install.sh" ]] || fail "Downloaded archive is incomplete."
+    ok "Downloaded"
 
-cd "$INSTALL_TMP/binadit-firewall"
+    if [[ "$action" == "uninstall" ]]; then
+        info "Starting uninstaller..."
+    else
+        info "Starting installer..."
+    fi
+    echo ""
 
-# Pass through any arguments (e.g., --non-interactive, --uninstall)
-# Redirect /dev/tty as stdin so interactive prompts work even when piped (curl | bash)
-if [[ -t 1 ]] && [[ -e /dev/tty ]]; then
-    bash install.sh "$@" < /dev/tty
-else
-    bash install.sh "$@"
-fi
+    cd "$src"
+
+    # With "curl | bash" stdin is the script itself, not the keyboard. Use the
+    # terminal for the installer's questions when there is one; otherwise the
+    # installer runs unattended with safe defaults.
+    if { : < /dev/tty; } 2>/dev/null; then
+        bash install.sh "$@" < /dev/tty
+    else
+        bash install.sh "$@" < /dev/null
+    fi
+}
+
+# Wrapped in a function so a partially downloaded script can never run
+main "$@"

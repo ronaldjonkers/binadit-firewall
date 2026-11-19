@@ -8,10 +8,23 @@
 # Detect the best available firewall backend
 # Priority: nftables > iptables-nft > iptables-legacy
 detect_backend() {
+    # Explicit override: BINADIT_BACKEND=nftables|iptables
+    case "${BINADIT_BACKEND:-}" in
+        nftables)
+            echo "nftables"; return 0 ;;
+        iptables|iptables-nft|iptables-legacy)
+            if [[ "$(iptables --version 2>/dev/null || true)" == *"nf_tables"* ]]; then
+                echo "iptables-nft"
+            else
+                echo "iptables-legacy"
+            fi
+            return 0 ;;
+    esac
+
     # Check for nftables (native)
     if command -v nft &>/dev/null; then
         # Verify nft actually works
-        if nft list ruleset &>/dev/null 2>&1; then
+        if nft list tables &>/dev/null; then
             echo "nftables"
             return 0
         fi
