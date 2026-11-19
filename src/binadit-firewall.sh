@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v3.1.0
+# binadit-firewall v3.1.1
 # =============================================================================
 # A modern, easy-to-use Linux firewall manager with support for both
 # nftables and iptables backends.
@@ -239,6 +239,27 @@ fw_apply() {
         *)
             log_error "Unsupported backend: $backend"
             return 1 ;;
+    esac
+
+    # The new rules are in place: remove what an earlier backend or version
+    # left behind, so only one ruleset decides what happens to a packet
+    case "$backend" in
+        nftables)
+            if command -v iptables &>/dev/null; then
+                if ipt_is_active; then
+                    log_info "Backend changed to nftables — removing the old iptables rules"
+                    ipt_flush >/dev/null
+                fi
+                ipt_remove_v1_rules
+            fi
+            ;;
+        *)
+            if command -v nft &>/dev/null && nft_is_active; then
+                log_info "Backend changed to iptables — removing the old nftables rules"
+                nft_flush >/dev/null
+            fi
+            ipt_remove_v1_rules
+            ;;
     esac
 
     # Kernel settings that belong to the enabled features
@@ -533,6 +554,13 @@ refresh_integrations() {
     fi
     if [[ -f "$PROMPT_SCRIPT" ]] && ! grep -q "$PROFILE_MARKER" "$PROMPT_SCRIPT" 2>/dev/null; then
         _write_prompt_script 2>/dev/null || true
+    fi
+    # "sudo binadit-firewall" needs the command in sudo's secure_path, which
+    # does not include /usr/local/sbin on RHEL-like systems
+    local link="/usr/sbin/binadit-firewall"
+    if [[ -x "$SBIN_LINK" && ! -e "$link" && ! -L "$link" && -d /usr/sbin ]] \
+        && [[ "$(readlink -f /usr/sbin)" != "$(readlink -f "$(dirname "$SBIN_LINK")")" ]]; then
+        ln -s "$SBIN_LINK" "$link" 2>/dev/null || true
     fi
     return 0
 }

@@ -5,6 +5,19 @@ All notable changes to binadit-firewall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-11-19
+
+Fixes for problems found while installing 3.1.0 on real servers.
+
+### 🔒 Security
+- **v1 migration opened SSH to everyone.** v1 only allowed SSH from `SSHACCESS`, `DMZS` and `DMZRANGE`; the migration copied `SSHACCESS` alone, and an empty `SSH_ALLOWED_IPS` means "open to everyone". The migration now carries all three (IPv4 and IPv6) over to `SSH_ALLOWED_IPS`. SSH only stays public when it was public in v1 (SSH port listed in `TCPPORTS`). **Servers already migrated with 3.1.0 or older: check `binadit-firewall config get SSH_ALLOWED_IPS`.**
+- **v1 rules stayed loaded after a migration** next to the new ones until the next reboot (including v1's blocking of outgoing traffic). They are now removed as soon as the new rules are active — also on servers that were migrated earlier, at their next reload or update.
+
+### Fixed
+- **Same distribution, different backend.** On a system that runs iptables through nf_tables but lacks the `nft` tool (e.g. a minimal Rocky/Alma install), the installer now installs `nftables` instead of falling back to the iptables backend. Systems with legacy iptables are left alone.
+- **Switching backend left the old rules behind.** When the backend changes (e.g. `nftables` got installed later), the rules loaded through the previous backend are removed after the new ones are active.
+- **`sudo binadit-firewall` did not work on RHEL-like systems**, because `/usr/local/sbin` is not in sudo's `secure_path` there. The command is now also linked into `/usr/sbin` (existing installations get the link on their next reload or update).
+
 ## [3.1.0] - 2026-11-19
 
 Security and correctness release. Every documented feature was checked against

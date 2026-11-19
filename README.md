@@ -5,7 +5,7 @@
 Manage your server's firewall through a single, clean configuration file. No complex syntax, no GUI needed — just edit, apply, done.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Version](https://img.shields.io/badge/version-3.1.0-green.svg)]()
+[![Version](https://img.shields.io/badge/version-3.1.1-green.svg)]()
 
 ## One-Line Install
 
@@ -351,7 +351,9 @@ or re-run the one-line installer. Your configuration is preserved either way.
 curl -sL https://raw.githubusercontent.com/ronaldjonkers/binadit-firewall/master/get.sh | sudo bash
 ```
 
-The installer detects the old `/etc/firewall.d/host.conf` and migrates all settings to the new format. Old files are renamed, not deleted, and the old init script is retired.
+The installer detects the old `/etc/firewall.d/host.conf` and migrates all settings to the new format. Old files are renamed, not deleted, the old init script is retired, and the v1 rules still loaded in the kernel are removed once the new firewall is active.
+
+**SSH access is preserved.** v1 only allowed SSH from `SSHACCESS`, `DMZS` and `DMZRANGE` (unless the SSH port was in `TCPPORTS`). Those addresses are all written to `SSH_ALLOWED_IPS`, so SSH is not suddenly open to everyone. If v1 allowed SSH from nobody at all, the migration warns: binadit-firewall never closes SSH completely.
 
 ### Variable mappings (v1.x → v3.x)
 
@@ -363,6 +365,7 @@ The installer detects the old `/etc/firewall.d/host.conf` and migrates all setti
 | `UDPPORTS` | `UDP_PORTS` |
 | `DMZS` | `TRUSTED_IPS` |
 | `SSHACCESS` | `SSH_ALLOWED_IPS` |
+| `DMZS`, `DMZRANGE` | also added to `SSH_ALLOWED_IPS` (they had SSH access in v1) |
 | `DMZRANGE` | `TRUSTED_RANGES` |
 | `BLACKLIST` | `BLACKLIST` |
 | `BLOCKRANGE` | `BLOCKED_RANGES` |

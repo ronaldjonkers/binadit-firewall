@@ -729,6 +729,7 @@ BLACKLIST_IPv6=""
 MULTICAST_ENABLE="TRUE"
 NATROUTER_ENABLE="FALSE"
 EOF
+    export BINADIT_V1_SSH_PORTS="22"
     migrate_v1_config "$old" "$new" "$EXAMPLE_CONF" >/dev/null 2>&1
     assert_true   "new config is created"              test -f "$new"
     load_config "$new"
@@ -736,8 +737,10 @@ EOF
     assert_equals "TCP input ports migrated"           "8080" "$TCP_PORTS_INPUT"
     assert_equals "UDP ports migrated"                 "53" "$UDP_PORTS"
     assert_equals "DMZ with CIDR migrated (slash-safe)" "10.0.0.0/24 office.example.com" "$TRUSTED_IPS"
-    assert_equals "SSH access migrated"                "1.2.3.4" "$SSH_ALLOWED_IPS"
+    assert_equals "SSH access keeps SSHACCESS + DMZS + DMZRANGE" \
+        "1.2.3.4 10.0.0.0/24 office.example.com 65.208.151.1-65.208.151.254" "$SSH_ALLOWED_IPS"
     assert_equals "IPv6 SSH access migrated"           "2001:db8::1" "$SSH_ALLOWED_IPS_IPV6"
+    assert_true   "SSH is restricted after migration"  ssh_is_restricted
     assert_equals "DMZ range migrated"                 "65.208.151.1-65.208.151.254" "$TRUSTED_RANGES"
     assert_equals "blacklist migrated"                 "5.6.7.8" "$BLACKLIST"
     assert_equals "TRUE becomes true"                  "true" "$MULTICAST_ENABLE"
@@ -752,6 +755,38 @@ EOF
     migrate_v1_config "$old" "$new" "$EXAMPLE_CONF" >/dev/null 2>&1
     load_config "$new"
     assert_equals "empty v1 port list does not become 80 443" "" "$TCP_PORTS"
+
+    # v1 with only DMZS: SSH was reachable from the DMZ only — must stay so
+    printf '%s\n' 'TCPPORTS="80 443"' 'DMZS="10.1.1.1"' 'DMZS_IPv6="2001:db8::1-2001:db8::ff"' > "$old"
+    rm -f "$new"
+    migrate_v1_config "$old" "$new" "$EXAMPLE_CONF" >/dev/null 2>&1
+    load_config "$new"
+    assert_equals "DMZS alone restricts SSH"           "10.1.1.1" "$SSH_ALLOWED_IPS"
+    assert_equals "DMZS_IPv6 alone restricts SSH"      "2001:db8::1-2001:db8::ff" "$SSH_ALLOWED_IPS_IPV6"
+    config_validate
+    assert_equals "DMZ-only migration validates"       "0" "${#CT_ERRORS[@]}"
+
+    # v1 with the SSH port in TCPPORTS: SSH was public — stays public
+    for ports in '22 80' '20:30 80'; do
+        printf '%s\n' "TCPPORTS=\"$ports\"" 'SSHACCESS="1.2.3.4"' 'DMZS="10.1.1.1"' > "$old"
+        rm -f "$new"
+        migrate_v1_config "$old" "$new" "$EXAMPLE_CONF" >/dev/null 2>&1
+        load_config "$new"
+        assert_equals "SSH port in TCPPORTS ($ports) keeps SSH public" "" "$SSH_ALLOWED_IPS$SSH_ALLOWED_IPS_IPV6"
+    done
+
+    # v1 that allowed SSH from nobody: cannot be expressed, must warn loudly
+    printf '%s\n' 'TCPPORTS="80"' > "$old"
+    rm -f "$new"
+    local out
+    out=$(migrate_v1_config "$old" "$new" "$EXAMPLE_CONF" 2>&1)
+    assert_has    "warns when v1 had SSH closed for all" "$out" "OPEN TO EVERYONE"
+    rm -f "$old".migrated.*
+    unset BINADIT_V1_SSH_PORTS
+
+    assert_true   "port_in_list: single port"          port_in_list 22 "80 22"
+    assert_true   "port_in_list: range"                port_in_list 22 "80 20:25"
+    assert_false  "port_in_list: no match"             port_in_list 22 "80 220 2:21"
 
     cat > "$old" <<< 'TCPPORTS="9999"'
     echo 'TCP_PORTS="80"' > "$new"

@@ -14,7 +14,7 @@ set -euo pipefail
 # Guard against re-sourcing (readonly can only be set once)
 if [[ -z "${_BINADIT_COMMON_LOADED:-}" ]]; then
     readonly _BINADIT_COMMON_LOADED=1
-    readonly BINADIT_VERSION="3.1.0"
+    readonly BINADIT_VERSION="3.1.1"
     readonly RED=$'\033[0;31m'
     readonly GREEN=$'\033[0;32m'
     readonly YELLOW=$'\033[1;33m'
@@ -987,6 +987,19 @@ backup_rules() {
 # Migration from binadit-firewall v1.x (2013)
 # =============================================================================
 
+# True when port $1 is covered by the port list $2 (single ports and ranges)
+port_in_list() {
+    local port="$1" entry
+    for entry in $2; do
+        if [[ "$entry" =~ ^([0-9]+)[:-]([0-9]+)$ ]]; then
+            (( port >= BASH_REMATCH[1] && port <= BASH_REMATCH[2] )) && return 0
+        elif [[ "$entry" == "$port" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Migrate /etc/firewall.d/host.conf into a new-style config file.
 # $1 old config, $2 new config, $3 example config to start from
 migrate_v1_config() {
@@ -1009,8 +1022,11 @@ migrate_v1_config() {
         printf 'UDP_PORTS=%s\n'            "$UDPPORTS"
         printf 'TRUSTED_IPS=%s\n'          "$DMZS"
         printf 'TRUSTED_IPS_IPV6=%s\n'     "$DMZS_IPv6"
-        printf 'SSH_ALLOWED_IPS=%s\n'      "$SSHACCESS"
-        printf 'SSH_ALLOWED_IPS_IPV6=%s\n' "$SSHACCESS_IPv6"
+        # v1 allowed SSH from SSHACCESS and from everything with full access
+        # (DMZS, DMZRANGE). In v3 an empty SSH_ALLOWED_IPS means "open to
+        # everyone", so the full-access entries are carried over as well.
+        printf 'SSH_ALLOWED_IPS=%s\n'      "$SSHACCESS $DMZS $DMZRANGE"
+        printf 'SSH_ALLOWED_IPS_IPV6=%s\n' "$SSHACCESS_IPv6 $DMZS_IPv6"
         printf 'TRUSTED_RANGES=%s\n'       "$DMZRANGE"
         printf 'BLACKLIST=%s\n'            "$BLACKLIST"
         printf 'BLACKLIST_IPV6=%s\n'       "$BLACKLIST_IPv6"
@@ -1023,15 +1039,45 @@ migrate_v1_config() {
     mkdir -p "$(dirname "$new_conf")"
     cp "$example" "$new_conf"
 
-    local key value
+    local key value v1_tcp="" v1_ssh=""
     while IFS='=' read -r key value; do
         [[ -z "$key" ]] && continue
         # v1 always had explicit port lists: an empty list there means "none"
         if [[ -z "$value" && "$key" != "TCP_PORTS" ]]; then
             continue
         fi
-        config_set_value "$new_conf" "$key" "$(echo "$value" | xargs)" || return 1
+        value=$(echo "$value" | xargs)
+        case "$key" in
+            TCP_PORTS)            v1_tcp="$value" ;;
+            TCP_PORTS_INPUT)      v1_tcp+=" $value" ;;
+            SSH_ALLOWED_IPS)      v1_ssh="$value" ;;
+            SSH_ALLOWED_IPS_IPV6) v1_ssh+=" $value" ;;
+        esac
+        # Decided below, once the whole v1 config is known
+        [[ "$key" == SSH_ALLOWED_IPS* ]] && continue
+        config_set_value "$new_conf" "$key" "$value" || return 1
     done <<< "$dump"
+
+    # SSH: keep exactly who could reach it under v1
+    local ssh_ports ssh_public="false" p
+    ssh_ports="${BINADIT_V1_SSH_PORTS:-$(detect_ssh_ports)}"
+    for p in $ssh_ports; do
+        port_in_list "$p" "$v1_tcp" && ssh_public="true"
+    done
+    if [[ "$ssh_public" == "true" ]]; then
+        log_info "SSH port (${ssh_ports}) was open to everyone in v1 (listed in TCPPORTS) — kept that way"
+    elif [[ -n "${v1_ssh// /}" ]]; then
+        local val
+        for key in SSH_ALLOWED_IPS SSH_ALLOWED_IPS_IPV6; do
+            val=$(sed -n "s/^${key}=//p" <<< "$dump" | xargs)
+            [[ -n "$val" ]] && { config_set_value "$new_conf" "$key" "$val" || return 1; }
+        done
+        log_success "SSH stays restricted to the v1 addresses (SSHACCESS, DMZS, DMZRANGE)"
+    else
+        log_warn "v1 allowed SSH from nobody (no SSHACCESS/DMZS and the SSH port was not in TCPPORTS)."
+        log_warn "binadit-firewall never closes SSH completely: SSH is now OPEN TO EVERYONE."
+        log_warn "Restrict it with: binadit-firewall config set SSH_ALLOWED_IPS \"<your-ip>\""
+    fi
 
     mv "$old_config" "${old_config}.migrated.$(date +%Y%m%d)"
     log_success "Config migrated: ${old_config} -> ${new_conf}"

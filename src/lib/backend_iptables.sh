@@ -390,6 +390,41 @@ ipt_flush() {
     log_success "iptables rules removed"
 }
 
+# True when the rules of binadit-firewall v1.x (2013) are still in the kernel.
+# v1 was the only version that dropped OUTGOING traffic by default, which
+# makes its ruleset easy to recognise. $1 = iptables or ip6tables command
+_ipt_has_v1_rules() {
+    local rules
+    rules=$("$1" -S 2>/dev/null) || return 1
+    [[ "$rules" == *"-P INPUT DROP"* && "$rules" == *"-P OUTPUT DROP"* ]]
+}
+
+# Remove rules left behind by v1.x after a migration. They would otherwise
+# stay active next to the new rules until the next reboot. Only acts on a
+# server that was migrated from v1 and still has the v1 ruleset loaded.
+ipt_remove_v1_rules() {
+    local traces=("${BINADIT_V1_DIR:-/etc/firewall.d}"/host.conf.migrated.*)
+    [[ -e "${traces[0]}" ]] || return 0
+
+    local cmd removed="false"
+    for cmd in "$(get_iptables_cmd 2>/dev/null)" "$(get_ip6tables_cmd 2>/dev/null)"; do
+        [[ -n "$cmd" ]] || continue
+        _ipt_has_v1_rules "$cmd" || continue
+        "$cmd" -P INPUT ACCEPT 2>/dev/null || true
+        "$cmd" -P OUTPUT ACCEPT 2>/dev/null || true
+        "$cmd" -P FORWARD ACCEPT 2>/dev/null || true
+        "$cmd" -F 2>/dev/null || true
+        "$cmd" -X 2>/dev/null || true
+        "$cmd" -t nat -F 2>/dev/null || true
+        "$cmd" -t nat -X 2>/dev/null || true
+        removed="true"
+    done
+    if [[ "$removed" == "true" ]]; then
+        log_success "Old v1.x rules removed from the kernel (they were still loaded next to the new ones)"
+    fi
+    return 0
+}
+
 # True when our rules are loaded
 ipt_is_active() {
     local ipt

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# binadit-firewall v3.1.0 - Installer
+# binadit-firewall v3.1.1 - Installer
 # =============================================================================
 # Copyright (C) 2013-2026 Ronald Jonkers — Binadit BV (binadit.com)
 # License: GPL-2.0
@@ -37,6 +37,7 @@ INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Installation paths
 INSTALL_DIR="/usr/local/share/binadit-firewall"
 SBIN_LINK="/usr/local/sbin/binadit-firewall"
+SYSTEM_LINK="/usr/sbin/binadit-firewall"
 CONFIG_DIR="/etc/binadit-firewall"
 SYSTEMD_DIR="/etc/systemd/system"
 BACKUP_DIR="${CONFIG_DIR}/backups"
@@ -534,6 +535,18 @@ install_dependencies() {
     local distro_family
     distro_family=$(detect_distro_family)
 
+    # A kernel that already runs iptables through nf_tables (iptables-nft) is
+    # an nftables system: install the native tool, so the same distribution
+    # always ends up on the same backend. Legacy-iptables systems are left alone.
+    if ! command -v nft &>/dev/null && [[ "$(iptables --version 2>/dev/null || true)" == *"nf_tables"* ]]; then
+        log_info "This system uses nf_tables but the nft tool is missing, installing nftables..."
+        update_pkg_cache
+        install_package "nftables" || true
+        if ! command -v nft &>/dev/null; then
+            log_warn "nftables could not be installed — continuing with the iptables backend"
+        fi
+    fi
+
     if command -v nft &>/dev/null || command -v iptables &>/dev/null; then
         command -v nft &>/dev/null && log_success "nftables available: $(nft --version 2>/dev/null || echo 'installed')"
         command -v iptables &>/dev/null && log_success "iptables available: $(iptables --version 2>/dev/null || echo 'installed')"
@@ -607,6 +620,18 @@ detect_existing_install() {
 # Install binadit-firewall files
 # =============================================================================
 
+# /usr/local/sbin is not in sudo's secure_path on RHEL-like systems, so
+# "sudo binadit-firewall" would not be found there. Link the command into
+# /usr/sbin as well (never over a file that is not ours).
+link_into_system_path() {
+    local link="$SYSTEM_LINK"
+    [[ -d "$(dirname "$link")" ]] || return 0
+    [[ "$(readlink -f "$(dirname "$link")")" == "$(readlink -f "$(dirname "$SBIN_LINK")")" ]] && return 0
+    if [[ -L "$link" ]] || [[ ! -e "$link" ]]; then
+        ln -sfn "$SBIN_LINK" "$link" 2>/dev/null || true
+    fi
+}
+
 install_program_files() {
     mkdir -p "$CONFIG_DIR" "$BACKUP_DIR"
     mkdir -p "$(dirname "$INSTALL_DIR")" "$(dirname "$SBIN_LINK")"
@@ -629,6 +654,7 @@ install_program_files() {
     rm -rf "${INSTALL_DIR}.old"
 
     ln -sf "$INSTALL_DIR/binadit-firewall.sh" "$SBIN_LINK"
+    link_into_system_path
 
     cp "${INSTALLER_DIR}/config/firewall.conf.example" "${CONFIG_DIR}/firewall.conf.example"
 }
@@ -793,6 +819,9 @@ uninstall() {
 
     # Program files
     rm -f "$SBIN_LINK"
+    if [[ -L "$SYSTEM_LINK" && "$(readlink "$SYSTEM_LINK")" == "$SBIN_LINK" ]]; then
+        rm -f "$SYSTEM_LINK"
+    fi
     rm -rf "$INSTALL_DIR" "${INSTALL_DIR}.old"
 
     # Firewalls the installer disabled: make them usable again (not started)
